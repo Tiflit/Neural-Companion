@@ -58,3 +58,7 @@ For promising candidates, inspect:
 No current source establishes an authorized, unmodified DLSS 5 runtime usable across NVIDIA, AMD, and Intel devices. Broad framework support and backend hardware support must remain separate.
 
 The announced October 16 NVIDIA model update is not assumed to be available to any community tool or this project. Recheck acquisition, terms, compatibility, and measured behavior when an actual component is selected.
+
+## Initial inference and capture experiments
+
+The [initial experiment record](INITIAL-EXPERIMENTS.md) evaluates Open Image Denoise as an isolated neural-inference candidate, Real-ESRGAN ncnn Vulkan as a secondary restoration route, and vkQuake/clean Skyrim Special Edition as a provisional capture pair. Their roles and unresolved rights differ; none is an adopted dependency or validated compatibility result. Additional pinned licence findings are recorded in the register.

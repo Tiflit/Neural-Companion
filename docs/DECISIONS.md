@@ -63,3 +63,5 @@ Status: initial planning record, 2026-10-14.
 - 2026-10-14: Owner requested a conservative rights/provenance baseline. Added pinned licence triage, source-review and attribution rules, and an empty incorporation register. No code-reuse approval or legal certification granted.
 
 - 2026-10-14: Refined planning following Claude/Gemini feedback: explicit pass-through/reference/neural validation, separate framework/provider compatibility, model-and-runtime selection evidence, provenance reporting, and deferred public interfaces. Reviews inform planning; they do not validate implementation. Standalone operation and the unmodified-model boundary remain in place.
+
+- 2026-10-14: Added an initial-experiment candidate record: provisional vkQuake/clean Skyrim Special Edition capture pair, OIDN inference laboratory candidate, and secondary Real-ESRGAN Vulkan research. No provider, toolchain, game installation, component distribution, or implementation approved; exact artifact/dependency reviews and local availability remain unresolved.
