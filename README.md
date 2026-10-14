@@ -34,6 +34,7 @@ DLSS 5 neural rendering is an initial integration candidate, not a dependency se
 | [Project scope](docs/PROJECT.md) | Goals, boundaries, user experience, and success criteria |
 | [Architecture proposal](docs/ARCHITECTURE.md) | Capture routes, input preparation, providers, and integration boundaries |
 | [Roadmap and validation](docs/ROADMAP.md) | Evidence gates, experiments, and implementation sequence |
+| [Initial experiment candidates](docs/INITIAL-EXPERIMENTS.md) | Provisional test hosts, provider shortlist, and evidence required before implementation |
 | [Related projects](docs/RESEARCH.md) | Inspiration, reuse candidates, source limitations, and open investigations |
 | [Component policy](docs/COMPONENT-POLICY.md) | Unmodified models, proprietary files, provenance, and licensing review |
 | [Source review rules](docs/SOURCE-REVIEW.md) | Required licence checks, provenance, and attribution before code reuse |

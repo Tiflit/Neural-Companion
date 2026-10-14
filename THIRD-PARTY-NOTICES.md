@@ -14,6 +14,8 @@ The planning documentation acknowledges related work in [docs/RESEARCH.md](docs/
 
 The current design discussion references DXVK's API translation, Vulkan layers, feeder/bridge input preparation, external capture tools, and provider separation. These are conceptual references summarized in original wording, not claims that their code has been adopted or that we originated their work.
 
+The initial experiment planning also credits Intel Open Image Denoise and its trained-weights project for documented neural denoising/provider capabilities; Xintao Wang's Real-ESRGAN and Vulkan port, nihui's inherited port work, and Tencent ncnn for restoration/Vulkan inference references; and vkQuake/QuakeSpasm/id Software for the proposed independent Vulkan test host. These are documentation-based research credits, not incorporation or endorsement. Exact source revisions and limits are in [the licence register](docs/LICENSE-REVIEW.md) and [experiment record](docs/INITIAL-EXPERIMENTS.md).
+
 No research citation grants rights to copy source, documentation, screenshots, binaries, or models. No endorsement is implied.
 
 ## Required future entries
