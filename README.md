@@ -36,9 +36,16 @@ DLSS 5 neural rendering is an initial integration candidate, not a dependency se
 | [Roadmap and validation](docs/ROADMAP.md) | Evidence gates, experiments, and implementation sequence |
 | [Related projects](docs/RESEARCH.md) | Inspiration, reuse candidates, source limitations, and open investigations |
 | [Component policy](docs/COMPONENT-POLICY.md) | Unmodified models, proprietary files, provenance, and licensing review |
+| [Source review rules](docs/SOURCE-REVIEW.md) | Required licence checks, provenance, and attribution before code reuse |
+| [Licence review register](docs/LICENSE-REVIEW.md) | Pinned findings and blocked/unapproved sources |
+| [Third-party notices](THIRD-PARTY-NOTICES.md) | Actual incorporation record and conceptual credits |
 | [Decisions and open questions](docs/DECISIONS.md) | Established direction and choices still to resolve |
 
 These documents are an initial planning baseline. Architecture details are proposals unless explicitly identified as established direction. There are no release dates or performance promises.
+
+## Third-party work
+
+Before using another repository to guide implementation, inspect its licence and record the intended use. Preserve required notices for any copied/adapted material, and cite material conceptual influence. Credit never substitutes for permission. No third-party implementation has been adopted; see the [source review rules](docs/SOURCE-REVIEW.md).
 
 ## Development workflow
 

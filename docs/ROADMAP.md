@@ -4,7 +4,8 @@ Status: proposed sequence. No implementation or execution is authorized merely b
 
 ## Stage 0: feasibility and component selection
 
-- Review related projects and their actual code, licenses, provenance, and input paths.
+- Before implementation study, inspect related projects' licences and notices, pin revisions, and record intended use under [source review rules](SOURCE-REVIEW.md). Review exact code/provenance/input paths only within that basis.
+- Resolve each intended incorporation's file-level/dependency terms and attribution; update [third-party notices](../THIRD-PARTY-NOTICES.md). Unclear rights block the affected reuse.
 - Find an authorized, unmodified runtime integration path and suitable hardware.
 - Verify whether the expected runtime is publicly documented and whether its use and distribution fit the project.
 - Select the first two games and record their API, bitness, renderer, and repeatable test scenes.

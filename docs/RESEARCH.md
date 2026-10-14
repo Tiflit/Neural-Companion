@@ -2,7 +2,9 @@
 
 Status: documentation-based reconnaissance, 2026-10-14. None of these projects has been executed or technically audited for Neural-Companion. Descriptions summarize upstream claims, not certified capabilities.
 
-No source, dependency, binary, or model from this list has been adopted.
+No source, dependency, binary, or model from this list has been adopted. Consult the [pinned licence review](LICENSE-REVIEW.md) before implementation study and follow [source review rules](SOURCE-REVIEW.md). Technical relevance is not permission to reuse code.
+
+Licence triage changed the shortlist: NeuralScreen is restrictive; BGFX-DLSS5-NR and UNCANNY have no explicit licence located at their inspected revisions; DLSS5-Patcher has a README MIT claim but incomplete repository licensing evidence. Their code/assets are blocked for reuse pending clarification. OptiScaler and inspected neural forks require a copyleft compatibility decision. The register contains exact evidence and limits.
 
 ## Priority references
 

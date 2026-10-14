@@ -8,6 +8,12 @@ Neural-Companion prepares game inputs and invokes existing enhancement technolog
 
 Preparing image resources, decoding documented game-buffer formats, and reconstructing game motion are distinct from modifying a model. Provider integration must still respect the exact runtime's terms and supported interface.
 
+## Source provenance and attribution
+
+Follow [source review rules](SOURCE-REVIEW.md) before using external repositories to inform implementation. The [licence register](LICENSE-REVIEW.md) records pinned preliminary findings; it is not an allowlist. Record actual reuse and conceptual influence in [third-party notices](../THIRD-PARTY-NOTICES.md), retain exact applicable licence/copyright/NOTICE texts, and document modifications. Unknown rights block incorporation. Automated rewriting does not erase provenance or licensing obligations.
+
+No external source is approved for code incorporation by this draft, even where a permissive root licence is identified.
+
 ## Distribution baseline
 
 Until specific rights are established:

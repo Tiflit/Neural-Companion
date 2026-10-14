@@ -16,6 +16,7 @@ Status: initial planning record, 2026-10-14.
 | D-006 | Broad game/vendor compatibility and minimal per-game tuning are goals | Multiple providers/routes may be necessary; no all-games/all-GPUs promise |
 | D-007 | Draft documentation before implementation | This change contains planning only |
 | D-008 | Multi-agent workflow template will be applied later | No new agent governance or copied workflow template in this draft |
+| D-009 | Check licences before implementation inspiration/reuse; credit actual influence and incorporated work | Pinned source review, exact-path obligations, and attribution records; unclear rights block reuse |
 
 ## Proposed architecture
 
@@ -56,3 +57,5 @@ Status: initial planning record, 2026-10-14.
 ## Change record
 
 - 2026-10-14: Initial documentation draft. No implementation, runtime adoption, legal clearance, hardware validation, or external outreach performed.
+
+- 2026-10-14: Owner requested a conservative rights/provenance baseline. Added pinned licence triage, source-review and attribution rules, and an empty incorporation register. No code-reuse approval or legal certification granted.

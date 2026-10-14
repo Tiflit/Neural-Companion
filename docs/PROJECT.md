@@ -19,6 +19,8 @@ The primary enhancement is lighting and material/detail appearance. Resolution u
 - Long-term hardware scope includes NVIDIA, AMD, and Intel. Actual backend support must be demonstrated independently.
 - Reuse of third-party code requires source and licence review; a public repository is not blanket permission to reuse every artifact it references.
 
+Licence and provenance checks precede implementation-level use of other repositories. Material conceptual influence is cited; copied/adapted work retains its authors' notices and applicable terms. No blanket source reuse approval follows from this planning draft. See [source review](SOURCE-REVIEW.md).
+
 ## Proposed first scope
 
 Windows desktop, offline games, and a Vulkan interception route. Compatible Direct3D games can reach that route through a separately installed DXVK distribution.
