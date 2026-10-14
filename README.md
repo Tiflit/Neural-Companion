@@ -41,6 +41,8 @@ DLSS 5 neural rendering is an initial integration candidate, not a dependency se
 | [Third-party notices](THIRD-PARTY-NOTICES.md) | Actual incorporation record and conceptual credits |
 | [Decisions and open questions](docs/DECISIONS.md) | Established direction and choices still to resolve |
 
+The proposed validation sequence is unchanged pass-through, an obvious deterministic reference effect, then a small legally usable neural provider. Framework compatibility and each provider's hardware support will be measured separately; a reference effect is not neural rendering, and a restoration model is not proof of neural relighting.
+
 These documents are an initial planning baseline. Architecture details are proposals unless explicitly identified as established direction. There are no release dates or performance promises.
 
 ## Third-party work

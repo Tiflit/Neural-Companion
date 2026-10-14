@@ -74,7 +74,11 @@ A provider declares its supported device families, operating systems, APIs, comp
 
 Cross-vendor framework design does not make proprietary models cross-vendor. Select a genuinely supported unmodified provider, or mark enhancement unavailable. Do not silently substitute a patched binary, extracted weights, or a different model.
 
-The first capture experiment can use a deterministic reference effect to validate transport. It must be labeled a reference provider, not neural enhancement.
+Prove unchanged pass-through first, then a deterministic reference effect, then a small legally usable neural provider. The reference effect validates transport and must not be labeled neural enhancement. A neural restoration provider validates inference but does not establish relighting capability.
+
+Provider discovery should report identity/version, supported devices and APIs, required inputs, model/weights provenance, runtime dependencies, and an explicit unavailable reason. These are experimental requirements, not a frozen manifest, public C ABI, or plugin schema. Derive interfaces from working experiments before committing to a public contract.
+
+Input provenance remains distinct from provider readiness: engine motion, camera/object reconstruction, optical-flow estimates, and unavailable data must not collapse into a single "motion supported" flag. Hardware support for one provider does not establish support for another.
 
 ## Configuration and DXVK-Companion
 
@@ -84,7 +88,9 @@ Neural-Companion owns its runtime and presets. DXVK-Companion may later manage i
 
 Native Vulkan enhancement eligibility must be separate from DXVK deployment eligibility. Existing DXVK-Companion refusal rules for installing DXVK into native Vulkan/DX12 games remain appropriate.
 
-Deployment mechanisms for Vulkan layers need explicit design, including activation scope and cleanup. Avoid system-wide activation by default. Check whether proposed registration affects portability before claiming a portable implementation.
+Deployment mechanisms for Vulkan layers need explicit design, including activation scope and cleanup. Avoid system-wide activation by default. Check whether proposed registration affects portability before claiming a portable implementation. A layer does not guarantee an untouched game directory: DXVK or other route components may still require local files.
+
+Use predictable user-selected settings as the proposed default. Automatic changes to processing resolution or visual quality, if later added, should be opt-in and visible. Blending an effect at lower intensity must not be assumed to reduce inference cost; measure the actual work performed. Multi-stage effect scheduling and automatic performance governors remain deferred.
 
 ## Diagnostics
 

@@ -25,7 +25,7 @@ Licence and provenance checks precede implementation-level use of other reposito
 
 Windows desktop, offline games, and a Vulkan interception route. Compatible Direct3D games can reach that route through a separately installed DXVK distribution.
 
-An early prototype should cover one DXVK-translated game and one native Vulkan game. Initial execution should target hardware officially supported by the selected unmodified backend. Cross-vendor inference is not a prerequisite for proving the capture and input framework.
+An early prototype should cover one DXVK-translated game and one native Vulkan game. The capture/reference experiment can run without a neural provider. Neural execution should target hardware officially supported by the selected unmodified provider; support for the framework and support for each provider are separate claims. Cross-vendor inference is not a prerequisite for proving the capture and input framework.
 
 Candidate validation hardware includes Intel Arc B580, Intel Arc 140V, and NVIDIA RTX 4060. These are available test targets, not declarations that any specific neural model supports them. If none supports the selected unmodified model, use a pass-through/reference provider until a suitable runtime and device are available.
 
@@ -35,7 +35,7 @@ Linux, other graphics APIs, external capture, and 32-bit game bridging are later
 
 The user selects a game and an enhancement preset. The application explains the available route and any missing provider component. Once configured, technical settings can be reused for similar games without asking the user to identify buffers or tune motion parameters.
 
-A technical profile may describe resource formats, frame boundaries, and UI passes without changing the user's chosen visual style. Per-game visual overrides remain optional.
+A technical profile may describe resource formats, frame boundaries, and UI passes without changing the user's chosen visual style. Per-game visual overrides remain optional. The proposed default is a predictable user-selected preset; any future automatic visual-quality adjustment should be opt-in and clearly reported.
 
 The interface should distinguish:
 
@@ -62,6 +62,8 @@ An enhancement model may deliberately change appearance; Neural-Companion cannot
 ## Initial exclusions
 
 No universal motion-vector recovery claim, native-equivalent guarantee, game-asset replacement pipeline, online compatibility promise, anti-cheat bypass, or automatic model/runtime download from unverified mirrors.
+
+API generation alone does not establish whether a game supplies motion vectors; inspect and validate its rendering resources. Compatibility heuristics cannot establish anti-cheat or ban safety. The first prototype remains scoped to offline testing.
 
 A 2D game or emulator may have no meaningful 3D depth or engine motion. Such cases need their own route rather than fabricated "native" inputs.
 
