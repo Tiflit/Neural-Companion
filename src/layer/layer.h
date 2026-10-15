@@ -55,6 +55,15 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice device, co
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceLayerProperties(uint32_t* pPropertyCount, VkLayerProperties* pProperties);
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceExtensionProperties(const char* pLayerName, uint32_t* pPropertyCount, VkExtensionProperties* pProperties);
 
+// Exported test hooks for verifying device isolation, dispatch tables, and fallback exhaustion
+VKAPI_ATTR bool VKAPI_CALL ncTestRegisterMockDevice(VkDevice device, PFN_vkQueuePresentKHR mockPresent, neural_companion::DeviceData** outDevData);
+VKAPI_ATTR void VKAPI_CALL ncTestUnregisterMockDevice(VkDevice device);
+VKAPI_ATTR bool VKAPI_CALL ncTestRecordFallbackQueue(VkQueue queue, VkDevice device);
+VKAPI_ATTR bool VKAPI_CALL ncTestRegisterMockSwapchain(VkSwapchainKHR swapchain, VkDevice device, bool useFallbackTable);
+VKAPI_ATTR size_t VKAPI_CALL ncTestGetFallbackQueueCount();
+VKAPI_ATTR void VKAPI_CALL ncTestResetFallbackState();
+VKAPI_ATTR PFN_vkQueuePresentKHR VKAPI_CALL ncTestGetPresentWrapper();
+
 #ifdef __cplusplus
 }
 #endif

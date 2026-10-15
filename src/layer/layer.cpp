@@ -68,6 +68,57 @@ static void RemoveFallbackQueuesForDeviceLocked(neural_companion::DeviceData* de
     }
 }
 
+// Fixed-capacity fallback table for swapchains to preserve swapchain-to-device ownership
+// even when dynamic memory allocation for std::unordered_map fails.
+struct FallbackSwapchainEntry {
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    neural_companion::DeviceData* devData = nullptr;
+};
+static constexpr size_t kMaxFallbackSwapchains = 64;
+static FallbackSwapchainEntry g_fallbackSwapchains[kMaxFallbackSwapchains]{};
+static size_t g_fallbackSwapchainCount = 0;
+
+static void RecordFallbackSwapchainLocked(VkSwapchainKHR swapchain, neural_companion::DeviceData* devData) noexcept {
+    if (swapchain == VK_NULL_HANDLE || !devData) return;
+    for (size_t i = 0; i < g_fallbackSwapchainCount; ++i) {
+        if (g_fallbackSwapchains[i].swapchain == swapchain) {
+            g_fallbackSwapchains[i].devData = devData;
+            return;
+        }
+    }
+    if (g_fallbackSwapchainCount < kMaxFallbackSwapchains) {
+        g_fallbackSwapchains[g_fallbackSwapchainCount].swapchain = swapchain;
+        g_fallbackSwapchains[g_fallbackSwapchainCount].devData = devData;
+        ++g_fallbackSwapchainCount;
+    }
+}
+
+static void RemoveFallbackSwapchainLocked(VkSwapchainKHR swapchain) noexcept {
+    if (swapchain == VK_NULL_HANDLE) return;
+    for (size_t i = 0; i < g_fallbackSwapchainCount; ) {
+        if (g_fallbackSwapchains[i].swapchain == swapchain) {
+            g_fallbackSwapchains[i] = g_fallbackSwapchains[g_fallbackSwapchainCount - 1];
+            g_fallbackSwapchains[g_fallbackSwapchainCount - 1] = FallbackSwapchainEntry{};
+            --g_fallbackSwapchainCount;
+        } else {
+            ++i;
+        }
+    }
+}
+
+static void RemoveFallbackSwapchainsForDeviceLocked(neural_companion::DeviceData* devData) noexcept {
+    if (!devData) return;
+    for (size_t i = 0; i < g_fallbackSwapchainCount; ) {
+        if (g_fallbackSwapchains[i].devData == devData) {
+            g_fallbackSwapchains[i] = g_fallbackSwapchains[g_fallbackSwapchainCount - 1];
+            g_fallbackSwapchains[g_fallbackSwapchainCount - 1] = FallbackSwapchainEntry{};
+            --g_fallbackSwapchainCount;
+        } else {
+            ++i;
+        }
+    }
+}
+
 static neural_companion::DeviceData* ResolveDeviceForQueueLocked(
     VkQueue queue,
     const VkPresentInfoKHR* pPresentInfo) noexcept
@@ -87,31 +138,29 @@ static neural_companion::DeviceData* ResolveDeviceForQueueLocked(
         }
     }
 
-    // 3. Fallback: Lookup device via swapchain in pPresentInfo
+    // 3. Fallback: Lookup device via swapchain ownership in pPresentInfo
     if (pPresentInfo && pPresentInfo->swapchainCount > 0 && pPresentInfo->pSwapchains) {
         for (uint32_t i = 0; i < pPresentInfo->swapchainCount; ++i) {
             VkSwapchainKHR sc = pPresentInfo->pSwapchains[i];
             if (sc != VK_NULL_HANDLE) {
+                // Check primary swapchain map
                 auto scIt = g_swapchainToDeviceMap.find(sc);
                 if (scIt != g_swapchainToDeviceMap.end() && scIt->second != nullptr) {
                     return scIt->second;
+                }
+                // Check fallback swapchain table
+                for (size_t j = 0; j < g_fallbackSwapchainCount; ++j) {
+                    if (g_fallbackSwapchains[j].swapchain == sc && g_fallbackSwapchains[j].devData != nullptr) {
+                        return g_fallbackSwapchains[j].devData;
+                    }
                 }
             }
         }
     }
 
-    // 4. Fallback: If only a single logical device exists, any valid queue must belong to it
-    if (g_deviceMap.size() == 1) {
-        return g_deviceMap.begin()->second.get();
-    }
-
-    // 5. Fallback: Check if any active device has vkQueuePresentKHR
-    for (const auto& pair : g_deviceMap) {
-        if (pair.second && pair.second->vkQueuePresentKHR) {
-            return pair.second.get();
-        }
-    }
-
+    // Strict device identity: If the queue is untracked and its swapchains are unowned/untracked,
+    // do NOT guess device ownership across unrelated devices. Return nullptr to prevent
+    // dispatching through an incorrect device's function pointer.
     return nullptr;
 }
 
@@ -548,6 +597,9 @@ static VKAPI_ATTR void VKAPI_CALL nc_vkDestroyDevice(
                 }
             }
 
+            // Remove associated fallback swapchain entries
+            RemoveFallbackSwapchainsForDeviceLocked(it->second.get());
+
             g_deviceMap.erase(it);
         }
     }
@@ -678,7 +730,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL nc_vkCreateSwapchainKHR(
             std::lock_guard<std::mutex> lock(g_stateMutex);
             g_swapchainToDeviceMap[*pSwapchain] = devData;
         } catch (...) {
-            // Optional swapchain bookkeeping failure must not impede pass-through
+            // Optional swapchain bookkeeping failure falls back to fixed table
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            RecordFallbackSwapchainLocked(*pSwapchain, devData);
         }
 
         uint32_t count = ++g_stats.swapchainCreations;
@@ -708,6 +762,7 @@ static VKAPI_ATTR void VKAPI_CALL nc_vkDestroySwapchainKHR(
             nextDestroy = devData->vkDestroySwapchainKHR;
         }
         g_swapchainToDeviceMap.erase(swapchain);
+        RemoveFallbackSwapchainLocked(swapchain);
     }
 
     if (nextDestroy) {
@@ -1072,6 +1127,95 @@ VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceExtensionProperties(
     VkExtensionProperties* pProperties)
 {
     return nc_vkEnumerateInstanceExtensionProperties(pLayerName, pPropertyCount, pProperties);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Exported Test Hooks (Regression Verification)
+// ------------------------------------------------------------------------------------------------
+
+VKAPI_ATTR bool VKAPI_CALL ncTestRegisterMockDevice(
+    VkDevice device,
+    PFN_vkQueuePresentKHR mockPresent,
+    neural_companion::DeviceData** outDevData)
+{
+    if (device == VK_NULL_HANDLE) return false;
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    auto devData = std::make_unique<neural_companion::DeviceData>();
+    devData->device = device;
+    devData->vkQueuePresentKHR = mockPresent;
+    if (outDevData) *outDevData = devData.get();
+    g_deviceMap[device] = std::move(devData);
+    return true;
+}
+
+VKAPI_ATTR void VKAPI_CALL ncTestUnregisterMockDevice(VkDevice device) {
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    auto it = g_deviceMap.find(device);
+    if (it != g_deviceMap.end()) {
+        neural_companion::DeviceData* devData = it->second.get();
+        for (auto qIt = g_queueToDeviceMap.begin(); qIt != g_queueToDeviceMap.end(); ) {
+            if (qIt->second == devData) {
+                qIt = g_queueToDeviceMap.erase(qIt);
+            } else {
+                ++qIt;
+            }
+        }
+        RemoveFallbackQueuesForDeviceLocked(devData);
+        for (auto scIt = g_swapchainToDeviceMap.begin(); scIt != g_swapchainToDeviceMap.end(); ) {
+            if (scIt->second == devData) {
+                scIt = g_swapchainToDeviceMap.erase(scIt);
+            } else {
+                ++scIt;
+            }
+        }
+        RemoveFallbackSwapchainsForDeviceLocked(devData);
+        g_deviceMap.erase(it);
+    }
+}
+
+VKAPI_ATTR bool VKAPI_CALL ncTestRecordFallbackQueue(VkQueue queue, VkDevice device) {
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    auto it = g_deviceMap.find(device);
+    if (it == g_deviceMap.end()) return false;
+    RecordFallbackQueueLocked(queue, it->second.get());
+    return true;
+}
+
+VKAPI_ATTR bool VKAPI_CALL ncTestRegisterMockSwapchain(VkSwapchainKHR swapchain, VkDevice device, bool useFallbackTable) {
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    auto it = g_deviceMap.find(device);
+    if (it == g_deviceMap.end()) return false;
+    if (useFallbackTable) {
+        RecordFallbackSwapchainLocked(swapchain, it->second.get());
+    } else {
+        try {
+            g_swapchainToDeviceMap[swapchain] = it->second.get();
+        } catch (...) {
+            RecordFallbackSwapchainLocked(swapchain, it->second.get());
+        }
+    }
+    return true;
+}
+
+VKAPI_ATTR size_t VKAPI_CALL ncTestGetFallbackQueueCount() {
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    return g_fallbackQueueCount;
+}
+
+VKAPI_ATTR void VKAPI_CALL ncTestResetFallbackState() {
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    g_fallbackQueueCount = 0;
+    for (size_t i = 0; i < kMaxFallbackQueues; ++i) {
+        g_fallbackQueues[i] = FallbackQueueEntry{};
+    }
+    g_fallbackSwapchainCount = 0;
+    for (size_t i = 0; i < kMaxFallbackSwapchains; ++i) {
+        g_fallbackSwapchains[i] = FallbackSwapchainEntry{};
+    }
+}
+
+VKAPI_ATTR PFN_vkQueuePresentKHR VKAPI_CALL ncTestGetPresentWrapper() {
+    return nc_vkQueuePresentKHR;
 }
 
 } // extern "C"

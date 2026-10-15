@@ -80,10 +80,56 @@ function Assert-BaselineIsolation([string[]]$baselineLines) {
     return $true
 }
 
+function Assert-LayerPassThroughSummary(
+    [string[]]$logLines,
+    [int]$expectedTotalCalls,
+    [int]$minExpectedSuccessfulCalls = $expectedTotalCalls,
+    [bool]$requireBalancedSwapchain = $true
+) {
+    $summaryLine = $logLines | Where-Object {
+        $_ -match "Total presentation calls:\s*(\d+),\s*successful presentation calls:\s*(\d+),\s*swapchains created:\s*(\d+),\s*swapchains destroyed:\s*(\d+)"
+    } | Select-Object -Last 1
+
+    if (-not $summaryLine) {
+        throw "Assertion Failed: Could not locate destruction summary line in layer log."
+    }
+
+    if ($summaryLine -notmatch "Total presentation calls:\s*(\d+),\s*successful presentation calls:\s*(\d+),\s*swapchains created:\s*(\d+),\s*swapchains destroyed:\s*(\d+)") {
+        throw "Assertion Failed: Summary line format mismatch: $summaryLine"
+    }
+
+    $totalPresentCalls      = [int]$matches[1]
+    $successfulPresentCalls = [int]$matches[2]
+    $totalCreated           = [int]$matches[3]
+    $totalDestroyed         = [int]$matches[4]
+
+    if ($totalPresentCalls -ne $expectedTotalCalls) {
+        throw "Assertion Failed: Total presentation calls ($totalPresentCalls) does not match expected ($expectedTotalCalls)"
+    }
+
+    if ($successfulPresentCalls -lt $minExpectedSuccessfulCalls) {
+        throw "Assertion Failed: Successful presentation calls ($successfulPresentCalls) is below minimum expected ($minExpectedSuccessfulCalls)"
+    }
+
+    if ($requireBalancedSwapchain) {
+        if ($totalCreated -le 0) {
+            throw "Assertion Failed: No swapchains created ($totalCreated)"
+        }
+        if ($totalCreated -ne $totalDestroyed) {
+            throw "Assertion Failed: Swapchain lifecycle not balanced ($totalCreated created vs $totalDestroyed destroyed)"
+        }
+    }
+
+    return [PSCustomObject]@{
+        TotalCalls      = $totalPresentCalls
+        SuccessfulCalls = $successfulPresentCalls
+        Created         = $totalCreated
+        Destroyed       = $totalDestroyed
+    }
+}
+
 if (-not ([System.Management.Automation.PSTypeName]'NC.Win32Helper').Type) {
     Add-Type -MemberDefinition @'
-        [DllImport("user32.dll", EntryPoint = "FindWindowA", CharSet = CharSet.Ansi)]
-        public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
         [DllImport("user32.dll")]
         public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
         [DllImport("user32.dll")]
@@ -144,22 +190,34 @@ function Invoke-ProcessBounded {
         $outTask = $proc.StandardOutput.ReadToEndAsync()
         $errTask = $proc.StandardError.ReadToEndAsync()
 
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
         if ($null -ne $OnProcessStarted) {
             & $OnProcessStarted $proc
         }
+        $sw.Stop()
 
-        $exited = $proc.WaitForExit($TimeoutMs)
+        # Deduct time spent in OnProcessStarted callback from remaining wait timeout
+        $remainingMs = [Math]::Max(1, [int]($TimeoutMs - $sw.ElapsedMilliseconds))
+        $exited = $proc.WaitForExit($remainingMs)
         if (-not $exited) {
             try { $proc.Kill() } catch {}
-            [void]$proc.WaitForExit()
+            try { [void]$proc.WaitForExit(3000) } catch {}
             throw "Process timed out after $TimeoutMs ms and was terminated: $FilePath $Arguments"
         }
 
-        [void]$proc.WaitForExit()
+        # Bounded wait for process completion and stream flush
+        [void]$proc.WaitForExit(3000)
         $proc.Refresh()
 
-        $stdout = $outTask.Result
-        $stderr = $errTask.Result
+        # Bounded read of stream tasks to avoid indefinite deadlocks
+        $streamDeadlineMs = 3000
+        $tasksCompleted = [System.Threading.Tasks.Task]::WaitAll(@($outTask, $errTask), $streamDeadlineMs)
+        if (-not $tasksCompleted) {
+            Write-Warning "Invoke-ProcessBounded: stream read tasks did not complete within $streamDeadlineMs ms"
+        }
+
+        $stdout = if ($outTask.IsCompleted) { $outTask.Result } else { "" }
+        $stderr = if ($errTask.IsCompleted) { $errTask.Result } else { "" }
         $exitCode = $proc.ExitCode
 
         return [PSCustomObject]@{
@@ -171,10 +229,13 @@ function Invoke-ProcessBounded {
         }
     }
     finally {
-        if ($proc -and -not $proc.HasExited) {
-            try { $proc.Kill() } catch {}
+        if ($proc) {
+            if (-not $proc.HasExited) {
+                try { $proc.Kill() } catch {}
+                try { [void]$proc.WaitForExit(2000) } catch {}
+            }
+            $proc.Dispose()
         }
-        $proc.Dispose()
     }
 }
 
@@ -327,6 +388,55 @@ Run-ParserTest "Positive: Clean baseline with validation active is accepted" {
     )
     $res = Assert-BaselineIsolation $fixture
     if (-not $res) { throw "Expected true, got false" }
+}
+
+# --- Negative & Positive Tests for Presentation Summary Parser ---
+
+Run-ParserTest "Negative: Forwarded presentation calls where all failed must be rejected" {
+    $fixture = @(
+        "[Neural-Companion Layer][INFO] nc_vkDestroyInstance: cleanly destroying instance 0x01 (Total presentation calls: 60, successful presentation calls: 0, swapchains created: 1, swapchains destroyed: 1)"
+    )
+    $caught = $false
+    try {
+        Assert-LayerPassThroughSummary $fixture -expectedTotalCalls 60 -minExpectedSuccessfulCalls 60
+    } catch {
+        $caught = $true
+    }
+    if (-not $caught) { throw "Expected exception when successful calls are 0, but succeeded" }
+}
+
+Run-ParserTest "Negative: Partial presentation failure below minimum must be rejected" {
+    $fixture = @(
+        "[Neural-Companion Layer][INFO] nc_vkDestroyInstance: cleanly destroying instance 0x01 (Total presentation calls: 60, successful presentation calls: 58, swapchains created: 1, swapchains destroyed: 1)"
+    )
+    $caught = $false
+    try {
+        Assert-LayerPassThroughSummary $fixture -expectedTotalCalls 60 -minExpectedSuccessfulCalls 60
+    } catch {
+        $caught = $true
+    }
+    if (-not $caught) { throw "Expected exception when successful calls (58) < expected (60), but succeeded" }
+}
+
+Run-ParserTest "Negative: Unbalanced swapchains in destruction summary must be rejected" {
+    $fixture = @(
+        "[Neural-Companion Layer][INFO] nc_vkDestroyInstance: cleanly destroying instance 0x01 (Total presentation calls: 60, successful presentation calls: 60, swapchains created: 2, swapchains destroyed: 1)"
+    )
+    $caught = $false
+    try {
+        Assert-LayerPassThroughSummary $fixture -expectedTotalCalls 60 -minExpectedSuccessfulCalls 60
+    } catch {
+        $caught = $true
+    }
+    if (-not $caught) { throw "Expected exception on unbalanced swapchain lifecycle, but succeeded" }
+}
+
+Run-ParserTest "Positive: Valid 60 successful presentation calls and balanced swapchains is accepted" {
+    $fixture = @(
+        "[Neural-Companion Layer][INFO] nc_vkDestroyInstance: cleanly destroying instance 0x01 (Total presentation calls: 60, successful presentation calls: 60, swapchains created: 1, swapchains destroyed: 1)"
+    )
+    $res = Assert-LayerPassThroughSummary $fixture -expectedTotalCalls 60 -minExpectedSuccessfulCalls 60
+    if ($res.SuccessfulCalls -ne 60 -or $res.Created -ne 1) { throw "Unexpected parsed result" }
 }
 
 Write-Host "================================================================="

@@ -5,3 +5,10 @@ EXPORTS
     vkGetDeviceProcAddr
     vkEnumerateInstanceLayerProperties
     vkEnumerateInstanceExtensionProperties
+    ncTestRegisterMockDevice
+    ncTestUnregisterMockDevice
+    ncTestRecordFallbackQueue
+    ncTestRegisterMockSwapchain
+    ncTestGetFallbackQueueCount
+    ncTestResetFallbackState
+    ncTestGetPresentWrapper

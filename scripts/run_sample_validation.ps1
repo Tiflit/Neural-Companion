@@ -100,6 +100,9 @@ Write-Host ""
 $origLayerPath   = $env:VK_LAYER_PATH
 $origLayers      = $env:VK_INSTANCE_LAYERS
 $origLogPath     = $env:NC_LOG_PATH
+$origLoaderDebug = $env:VK_LOADER_DEBUG
+$origSimOOM      = $env:NC_TEST_SIMULATE_QUEUE_OOM
+
 # -------------------------------------------------------------------------
 # Step 1.5: Run Acceptance Parser Unit & Negative Tests
 # -------------------------------------------------------------------------
@@ -110,9 +113,7 @@ if (-not (Test-Path $parserTestScript)) {
     exit 1
 }
 . $parserTestScript
-Write-Host "  [PASS] Acceptance check parser passed all 13 positive and negative tests.`n"
-
-$origLoaderDebug = $env:VK_LOADER_DEBUG
+Write-Host "  [PASS] Acceptance check parser passed all 17 positive and negative tests.`n"
 
 # -------------------------------------------------------------------------
 # Step 2: Run Focused Layer Dispatch & Query Semantics Unit Test
@@ -176,16 +177,13 @@ try {
         param($p)
         if ($IncludeResizeTest) {
             $hwnd = [IntPtr]::Zero
-            # Bounded poll for Vulkan Cube window handle: up to 30 attempts of 100ms
+            # Bounded poll for Vulkan Cube window handle matching child PID: up to 30 attempts of 100ms
             for ($i = 0; $i -lt 30 -and $hwnd -eq [IntPtr]::Zero; $i++) {
                 Start-Sleep -Milliseconds 100
                 $hwnd = [NC.Win32Helper]::FindCubeWindow([uint32]$p.Id)
-                if ($hwnd -eq [IntPtr]::Zero) {
-                    $hwnd = [NC.Win32Helper]::FindWindow("Vulkan Cube", $null)
-                }
             }
             if ($hwnd -eq [IntPtr]::Zero) {
-                Write-Error "Assertion Failed: Unable to acquire valid window handle (HWND) for resize test within 3000ms"
+                Write-Error "Assertion Failed: Unable to acquire valid window handle (HWND) for PID $($p.Id) within 3000ms"
             } else {
                 # Allow vkcube to enter active rendering loop before triggering resize (demo->prepared == true)
                 Start-Sleep -Milliseconds 350
@@ -282,22 +280,15 @@ $hasQueue       = ($logLines | Select-String "nc_vkGetDeviceQueue: mapped queue"
 $hasDestroyInst = ($logLines | Select-String "nc_vkDestroyInstance: instance .* destroyed").Length -gt 0
 
 # Extract swapchain and presentation metrics from layer lifecycle logs
-$destroySummaryLine = $logLines | Where-Object { $_ -match "nc_vkDestroyInstance: .* Total presentation calls:" } | Select-Object -Last 1
-$totalPresentCalls = 0
-$successfulPresentCalls = 0
-$totalCreated = 0
-$totalDestroyed = 0
-if ($destroySummaryLine -match "Total presentation calls:\s*(\d+),\s*successful presentation calls:\s*(\d+),\s*swapchains created:\s*(\d+),\s*swapchains destroyed:\s*(\d+)") {
-    $totalPresentCalls      = [int]$matches[1]
-    $successfulPresentCalls = [int]$matches[2]
-    $totalCreated           = [int]$matches[3]
-    $totalDestroyed         = [int]$matches[4]
-}
+$minExpectedSuccess = if ($IncludeResizeTest) { $FrameCount - 2 } else { $FrameCount }
+$summary = Assert-LayerPassThroughSummary $logLines -expectedTotalCalls $FrameCount -minExpectedSuccessfulCalls $minExpectedSuccess -requireBalancedSwapchain $true
+$totalPresentCalls = $summary.TotalCalls
+$successfulPresentCalls = $summary.SuccessfulCalls
+$totalCreated = $summary.Created
+$totalDestroyed = $summary.Destroyed
 
 $recreationMatches = $logLines | Where-Object { $_ -match "nc_vkCreateSwapchainKHR: .* RECREATION" }
 $recreationCount = $recreationMatches.Count
-
-$minExpectedSuccess = if ($IncludeResizeTest) { $FrameCount - 2 } else { $FrameCount }
 
 Write-Host "  Interface Negotiation (v2)        : $(if ($hasNegotiate) { '[PASS]' } else { '[FAIL]' })"
 Write-Host "  Instance Creation                 : $(if ($hasInstance) { '[PASS]' } else { '[FAIL]' })"
@@ -316,23 +307,8 @@ if (-not ($hasNegotiate -and $hasInstance -and $hasGpuDisc -and $hasDevice -and 
     exit 1
 }
 
-if ($totalCreated -le 0 -or $totalCreated -ne $totalDestroyed) {
-    Write-Error "Assertion Failed: Swapchain lifecycle not balanced ($totalCreated created vs $totalDestroyed destroyed)"
-    exit 1
-}
-
 if ($IncludeResizeTest -and $recreationCount -lt 1) {
     Write-Error "Assertion Failed: Resize test requested but zero swapchain recreation events observed"
-    exit 1
-}
-
-if ($totalPresentCalls -ne $FrameCount) {
-    Write-Error "Assertion Failed: Total presentation call count ($totalPresentCalls) does not match requested target ($FrameCount)"
-    exit 1
-}
-
-if ($successfulPresentCalls -lt $minExpectedSuccess) {
-    Write-Error "Assertion Failed: Successful presentation call count ($successfulPresentCalls) is below minimum expected ($minExpectedSuccess)"
     exit 1
 }
 
@@ -378,22 +354,37 @@ try {
         exit 1
     }
 
-    $oomLogLines = Get-Content $oomLogFile
-    $hasOOMFallback = ($oomLogLines | Select-String "optional queue map allocation failed.*falling back to non-allocating queue table").Length -gt 0
-    $hasPresentWithOOM = ($oomLogLines | Select-String "nc_vkDestroyInstance: .* Total presentation calls: 60").Length -gt 0
-
-    Write-Host "  Simulated Queue Map OOM Caught    : $(if ($hasOOMFallback) { '[PASS]' } else { '[FAIL]' })"
-    Write-Host "  Pass-Through Present via Fallback : $(if ($hasPresentWithOOM) { '[PASS]' } else { '[FAIL]' })"
-    Write-Host "  Validation Errors/Warnings Count  : 0 [PASS]"
-
-    if (-not ($hasOOMFallback -and $hasPresentWithOOM)) {
-        Write-Error "Assertion Failed: Queue OOM fallback verification failed in layer log."
+    # Verify confirmed activation of both layers
+    $ncActive = Test-LayerActivation $oomHostLines "VK_LAYER_NEURALCOMPANION_passthrough"
+    $valActive = Test-LayerActivation $oomHostLines "VK_LAYER_KHRONOS_validation"
+    if (-not $ncActive) {
+        Write-Error "Assertion Failed: VK_LAYER_NEURALCOMPANION_passthrough was not confirmed active in OOM regression run"
         exit 1
     }
+    if (-not $valActive) {
+        Write-Error "Assertion Failed: VK_LAYER_KHRONOS_validation was not confirmed active in OOM regression run"
+        exit 1
+    }
+
+    $oomLogLines = Get-Content $oomLogFile
+    $hasOOMFallback = ($oomLogLines | Select-String "optional queue map allocation failed.*falling back to non-allocating queue table").Length -gt 0
+    if (-not $hasOOMFallback) {
+        Write-Error "Assertion Failed: Queue map allocation failure fallback message not found in layer log"
+        exit 1
+    }
+
+    # Strict parsed metrics assertion: requires exact 60 total presentation calls, 60 successful calls (successful == total), and balanced swapchain lifecycle
+    $oomSummary = Assert-LayerPassThroughSummary $oomLogLines -expectedTotalCalls 60 -minExpectedSuccessfulCalls 60 -requireBalancedSwapchain $true
+
+    Write-Host "  Both Layers Active                : [PASS]"
+    Write-Host "  Simulated Queue Map OOM Caught    : [PASS]"
+    Write-Host "  Pass-Through Present (60 calls)   : [PASS - $($oomSummary.SuccessfulCalls)/$($oomSummary.TotalCalls) successful]"
+    Write-Host "  Swapchain Lifecycle Balanced      : [PASS - $($oomSummary.Created) created / $($oomSummary.Destroyed) destroyed]"
+    Write-Host "  Validation Errors/Warnings Count  : 0 [PASS]"
     Write-Host "  [PASS] Live cooperating host presented 60 frames uninterrupted under simulated queue map OOM.`n"
 }
 finally {
-    Remove-Item Env:\NC_TEST_SIMULATE_QUEUE_OOM -ErrorAction SilentlyContinue
+    if ($null -ne $origSimOOM) { $env:NC_TEST_SIMULATE_QUEUE_OOM = $origSimOOM } else { Remove-Item Env:\NC_TEST_SIMULATE_QUEUE_OOM -ErrorAction SilentlyContinue }
     if ($null -ne $origLayerPath)   { $env:VK_LAYER_PATH = $origLayerPath } else { Remove-Item Env:\VK_LAYER_PATH -ErrorAction SilentlyContinue }
     if ($null -ne $origLayers)      { $env:VK_INSTANCE_LAYERS = $origLayers } else { Remove-Item Env:\VK_INSTANCE_LAYERS -ErrorAction SilentlyContinue }
     if ($null -ne $origLogPath)     { $env:NC_LOG_PATH = $origLogPath } else { Remove-Item Env:\NC_LOG_PATH -ErrorAction SilentlyContinue }
@@ -438,6 +429,7 @@ try {
     Write-Host "  [PASS] Clean removal and baseline operation verified with activation evidence."
 }
 finally {
+    if ($null -ne $origSimOOM)      { $env:NC_TEST_SIMULATE_QUEUE_OOM = $origSimOOM } else { Remove-Item Env:\NC_TEST_SIMULATE_QUEUE_OOM -ErrorAction SilentlyContinue }
     if ($null -ne $origLayerPath)   { $env:VK_LAYER_PATH = $origLayerPath } else { Remove-Item Env:\VK_LAYER_PATH -ErrorAction SilentlyContinue }
     if ($null -ne $origLayers)      { $env:VK_INSTANCE_LAYERS = $origLayers } else { Remove-Item Env:\VK_INSTANCE_LAYERS -ErrorAction SilentlyContinue }
     if ($null -ne $origLoaderDebug) { $env:VK_LOADER_DEBUG = $origLoaderDebug } else { Remove-Item Env:\VK_LOADER_DEBUG -ErrorAction SilentlyContinue }

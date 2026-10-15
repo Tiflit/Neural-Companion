@@ -67,6 +67,7 @@ add_executable(test_layer_dispatch
 
 target_include_directories(test_layer_dispatch PRIVATE
     ${VULKAN_INCLUDE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/layer
 )
 
 if(DEFINED VULKAN_LIB_DIR AND EXISTS "${VULKAN_LIB_DIR}/vulkan-1.lib")

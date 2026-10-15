@@ -6,6 +6,8 @@
 #include <windows.h>
 #endif
 
+#include "layer.h"
+
 #include <iostream>
 #include <vector>
 #include <cstring>
@@ -18,6 +20,23 @@
             return 1; \
         } \
     } while (0)
+
+static int g_mockPresentACalls = 0;
+static int g_mockPresentBCalls = 0;
+static VkQueue g_lastQueueSeenA = VK_NULL_HANDLE;
+static VkQueue g_lastQueueSeenB = VK_NULL_HANDLE;
+
+static VKAPI_ATTR VkResult VKAPI_CALL MockPresentA(VkQueue q, const VkPresentInfoKHR* /*pInfo*/) {
+    ++g_mockPresentACalls;
+    g_lastQueueSeenA = q;
+    return VK_SUCCESS;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL MockPresentB(VkQueue q, const VkPresentInfoKHR* /*pInfo*/) {
+    ++g_mockPresentBCalls;
+    g_lastQueueSeenB = q;
+    return VK_SUCCESS;
+}
 
 int main() {
     std::cout << "=================================================================\n";
@@ -217,6 +236,11 @@ int main() {
             layerGDPA(deviceWithExt, "vkGetDeviceQueue"));
         TEST_ASSERT(pfnLayerGetDeviceQueue != nullptr, "layerGDPA must return valid vkGetDeviceQueue");
 
+        // Save previous NC_TEST_SIMULATE_QUEUE_OOM environment variable
+        char origSimOOM[16] = {0};
+        DWORD origSimOOMLen = GetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", origSimOOM, sizeof(origSimOOM));
+        bool hadOrigSimOOM = (origSimOOMLen > 0);
+
         // Simulate queue map allocation failure via test environment variable
         SetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", "1");
 
@@ -225,14 +249,10 @@ int main() {
         TEST_ASSERT(queueWithOOM != VK_NULL_HANDLE, "vkGetDeviceQueue must return valid queue handle even under map OOM");
         std::cout << "  [PASS] vkGetDeviceQueue returned valid handle under simulated OOM (queue: 0x" << queueWithOOM << ")\n";
 
-        // Reset simulation flag
-        SetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", "");
-
         // Also test vkGetDeviceQueue2 if available
         PFN_vkGetDeviceQueue2 pfnLayerGetDeviceQueue2 = reinterpret_cast<PFN_vkGetDeviceQueue2>(
             layerGDPA(deviceWithExt, "vkGetDeviceQueue2"));
         if (pfnLayerGetDeviceQueue2) {
-            SetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", "1");
             VkDeviceQueueInfo2 qInfo2{};
             qInfo2.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2;
             qInfo2.queueFamilyIndex = queueFamilyIndex;
@@ -240,12 +260,114 @@ int main() {
             VkQueue q2 = VK_NULL_HANDLE;
             pfnLayerGetDeviceQueue2(deviceWithExt, &qInfo2, &q2);
             TEST_ASSERT(q2 != VK_NULL_HANDLE, "vkGetDeviceQueue2 must return valid queue handle under map OOM");
-            SetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", "");
             std::cout << "  [PASS] vkGetDeviceQueue2 returned valid handle under simulated OOM (queue: 0x" << q2 << ")\n";
+        }
+
+        // Restore prior NC_TEST_SIMULATE_QUEUE_OOM state
+        if (hadOrigSimOOM) {
+            SetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", origSimOOM);
+        } else {
+            SetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", nullptr);
         }
 
         vkDestroyDevice(deviceWithExt, nullptr);
         std::cout << "  [PASS] Device with extensions destroyed cleanly\n";
+
+        // -------------------------------------------------------------------------
+        // TEST 4: Fallback Exhaustion & Device Dispatch Isolation Regression Test
+        // -------------------------------------------------------------------------
+        std::cout << "\n--- Test 4: Fallback Exhaustion & Device Dispatch Isolation ---\n";
+
+        auto pfnRegisterMockDevice = reinterpret_cast<decltype(&ncTestRegisterMockDevice)>(GetProcAddress(hLayer, "ncTestRegisterMockDevice"));
+        auto pfnUnregisterMockDevice = reinterpret_cast<decltype(&ncTestUnregisterMockDevice)>(GetProcAddress(hLayer, "ncTestUnregisterMockDevice"));
+        auto pfnRecordFallbackQueue = reinterpret_cast<decltype(&ncTestRecordFallbackQueue)>(GetProcAddress(hLayer, "ncTestRecordFallbackQueue"));
+        auto pfnRegisterMockSwapchain = reinterpret_cast<decltype(&ncTestRegisterMockSwapchain)>(GetProcAddress(hLayer, "ncTestRegisterMockSwapchain"));
+        auto pfnGetFallbackQueueCount = reinterpret_cast<decltype(&ncTestGetFallbackQueueCount)>(GetProcAddress(hLayer, "ncTestGetFallbackQueueCount"));
+        auto pfnResetFallbackState = reinterpret_cast<decltype(&ncTestResetFallbackState)>(GetProcAddress(hLayer, "ncTestResetFallbackState"));
+        auto pfnGetPresentWrapper = reinterpret_cast<decltype(&ncTestGetPresentWrapper)>(GetProcAddress(hLayer, "ncTestGetPresentWrapper"));
+
+        TEST_ASSERT(pfnRegisterMockDevice && pfnUnregisterMockDevice && pfnRecordFallbackQueue &&
+                    pfnRegisterMockSwapchain && pfnGetFallbackQueueCount && pfnResetFallbackState &&
+                    pfnGetPresentWrapper, "All test hooks must be exported and resolvable from layer DLL");
+
+        PFN_vkQueuePresentKHR layerPresent = pfnGetPresentWrapper();
+        TEST_ASSERT(layerPresent != nullptr, "Layer presentation wrapper must be non-null");
+
+        VkDevice mockDevA = reinterpret_cast<VkDevice>(static_cast<uintptr_t>(0xA000));
+        VkDevice mockDevB = reinterpret_cast<VkDevice>(static_cast<uintptr_t>(0xB000));
+
+        TEST_ASSERT(pfnRegisterMockDevice(mockDevA, MockPresentA, nullptr), "Register mock device A");
+        TEST_ASSERT(pfnRegisterMockDevice(mockDevB, MockPresentB, nullptr), "Register mock device B");
+
+        // Part A: Two distinct mocked device dispatch tables under allocation failure
+        VkQueue queueA = reinterpret_cast<VkQueue>(static_cast<uintptr_t>(0x101));
+        VkQueue queueB = reinterpret_cast<VkQueue>(static_cast<uintptr_t>(0x201));
+
+        TEST_ASSERT(pfnRecordFallbackQueue(queueA, mockDevA), "Record fallback queue for device A");
+        TEST_ASSERT(pfnRecordFallbackQueue(queueB, mockDevB), "Record fallback queue for device B");
+
+        VkPresentInfoKHR emptyPresentInfo{};
+        emptyPresentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+
+        VkResult resA = layerPresent(queueA, &emptyPresentInfo);
+        TEST_ASSERT(resA == VK_SUCCESS, "Present queue A should succeed");
+        TEST_ASSERT(g_mockPresentACalls == 1 && g_mockPresentBCalls == 0, "Queue A must dispatch exclusively to Device A");
+        TEST_ASSERT(g_lastQueueSeenA == queueA, "Device A must receive queue A");
+
+        VkResult resB = layerPresent(queueB, &emptyPresentInfo);
+        TEST_ASSERT(resB == VK_SUCCESS, "Present queue B should succeed");
+        TEST_ASSERT(g_mockPresentACalls == 1 && g_mockPresentBCalls == 1, "Queue B must dispatch exclusively to Device B");
+        TEST_ASSERT(g_lastQueueSeenB == queueB, "Device B must receive queue B");
+        std::cout << "  [PASS] Distinct mocked device dispatch tables verified under allocation failure\n";
+
+        // Part B: Fallback table exhaustion
+        pfnResetFallbackState();
+        TEST_ASSERT(pfnGetFallbackQueueCount() == 0, "Fallback table reset");
+
+        // Fill all 128 fallback entries for Device A
+        for (size_t i = 0; i < 128; ++i) {
+            VkQueue q = reinterpret_cast<VkQueue>(static_cast<uintptr_t>(0x5000 + i));
+            TEST_ASSERT(pfnRecordFallbackQueue(q, mockDevA), "Fill fallback entry");
+        }
+        TEST_ASSERT(pfnGetFallbackQueueCount() == 128, "Fallback queue table must be full (128 entries)");
+
+        // Attempt to add a 129th queue (must fail to fit into fixed table)
+        VkQueue queue129 = reinterpret_cast<VkQueue>(static_cast<uintptr_t>(0x9999));
+        pfnRecordFallbackQueue(queue129, mockDevA);
+        TEST_ASSERT(pfnGetFallbackQueueCount() == 128, "Fallback table must remain capped at 128");
+
+        // Subcase B.1: 129th untracked queue presented with NO swapchain
+        // Must be rejected with VK_ERROR_INITIALIZATION_FAILED without cross-device guessing
+        int preCallsA = g_mockPresentACalls;
+        int preCallsB = g_mockPresentBCalls;
+        VkResult resExhausted = layerPresent(queue129, &emptyPresentInfo);
+        TEST_ASSERT(resExhausted == VK_ERROR_INITIALIZATION_FAILED,
+                    "Untracked queue on exhausted fallback without swapchain must fail with VK_ERROR_INITIALIZATION_FAILED");
+        TEST_ASSERT(g_mockPresentACalls == preCallsA && g_mockPresentBCalls == preCallsB,
+                    "Exhausted untracked queue must not dispatch to any device (no guessing)");
+        std::cout << "  [PASS] Fallback exhaustion: untracked queue safely rejected without guessing\n";
+
+        // Subcase B.2: 129th untracked queue presented with swapchain owned by Device B
+        // Must route strictly to Device B via swapchain ownership even under queue table exhaustion
+        VkSwapchainKHR scB = reinterpret_cast<VkSwapchainKHR>(static_cast<uintptr_t>(0x7000));
+        TEST_ASSERT(pfnRegisterMockSwapchain(scB, mockDevB, /*useFallbackTable=*/true), "Register fallback swapchain for Device B");
+
+        VkPresentInfoKHR scBPresentInfo{};
+        scBPresentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        scBPresentInfo.swapchainCount = 1;
+        scBPresentInfo.pSwapchains = &scB;
+
+        VkResult resScB = layerPresent(queue129, &scBPresentInfo);
+        TEST_ASSERT(resScB == VK_SUCCESS, "Present with Device B swapchain must succeed");
+        TEST_ASSERT(g_mockPresentBCalls == preCallsB + 1, "Must dispatch strictly to Device B (swapchain owner)");
+        TEST_ASSERT(g_mockPresentACalls == preCallsA, "Must NOT dispatch to Device A");
+        std::cout << "  [PASS] Swapchain ownership routing verified under fallback exhaustion\n";
+
+        // Teardown mock devices
+        pfnUnregisterMockDevice(mockDevA);
+        pfnUnregisterMockDevice(mockDevB);
+        pfnResetFallbackState();
+        std::cout << "  [PASS] Mock devices and fallback state cleaned up cleanly\n";
     } else {
         std::cout << "  [SKIP] Physical device does not support VK_KHR_swapchain; skipping enabled test\n";
     }
