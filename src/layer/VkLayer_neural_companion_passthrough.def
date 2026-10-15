@@ -1,0 +1,7 @@
+LIBRARY VkLayer_neural_companion_passthrough
+EXPORTS
+    vkNegotiateLoaderLayerInterfaceVersion
+    vkGetInstanceProcAddr
+    vkGetDeviceProcAddr
+    vkEnumerateInstanceLayerProperties
+    vkEnumerateInstanceExtensionProperties

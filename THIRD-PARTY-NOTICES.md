@@ -4,9 +4,11 @@ Status: planning documentation only, 2026-10-14.
 
 ## Incorporated components
 
-None. No third-party implementation code, vendor DLL, model weights, shader, or release asset has been incorporated or distributed by this documentation draft.
+None. No third-party implementation code, vendor DLL, model weights, shader, or release asset has been incorporated or distributed by this repository.
 
-The repository's MIT licence applies to project-authored material. It does not relicense future third-party components.
+The Task 1 explicit Vulkan pass-through layer (`src/layer/`) and validation launcher (`scripts/run_sample_validation.ps1`) consist entirely of original, independently authored project material written to conform with the public Khronos Vulkan Loader-Layer Interface specification (`LoaderLayerInterface.md`) and standard Vulkan headers (`vulkan/vulkan.h`, `vulkan/vk_layer.h`). The layer compiles against headers provided by the pinned LunarG Vulkan SDK (`1.4.363.0`) and resolves dispatch dynamically via downstream function pointers without linking vendor binaries or static loader libraries.
+
+The repository's MIT licence applies to project-authored material. It does not relicense third-party specifications or future components.
 
 ## Research and conceptual references
 
