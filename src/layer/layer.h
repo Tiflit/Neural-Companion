@@ -36,7 +36,8 @@ struct DeviceData {
 };
 
 struct LayerStats {
-    std::atomic<uint64_t> presentedFrames{0};
+    std::atomic<uint64_t> totalPresentationCalls{0};
+    std::atomic<uint64_t> successfulPresentationCalls{0};
     std::atomic<uint32_t> swapchainCreations{0};
     std::atomic<uint32_t> swapchainDestructions{0};
 };

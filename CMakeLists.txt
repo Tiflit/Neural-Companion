@@ -5,19 +5,26 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Pinned Vulkan SDK path fallback
+# Vulkan SDK Resolution:
+# Prefer explicit -DVULKAN_SDK=..., then $ENV{VULKAN_SDK}, then CMake find_package(Vulkan)
 if(NOT DEFINED VULKAN_SDK AND DEFINED ENV{VULKAN_SDK})
     set(VULKAN_SDK "$ENV{VULKAN_SDK}")
-elseif(NOT DEFINED VULKAN_SDK)
-    set(VULKAN_SDK "D:/dev/VulkanSDK/1.4.363.0")
 endif()
 
-message(STATUS "Vulkan SDK Root: ${VULKAN_SDK}")
+if(DEFINED VULKAN_SDK)
+    set(VULKAN_INCLUDE_DIR "${VULKAN_SDK}/Include")
+    set(VULKAN_LIB_DIR "${VULKAN_SDK}/Lib")
+else()
+    find_package(Vulkan REQUIRED)
+    set(VULKAN_INCLUDE_DIR "${Vulkan_INCLUDE_DIRS}")
+    set(VULKAN_LIB_DIR "")
+endif()
 
-set(VULKAN_INCLUDE_DIR "${VULKAN_SDK}/Include")
 if(NOT EXISTS "${VULKAN_INCLUDE_DIR}/vulkan/vulkan.h")
-    message(FATAL_ERROR "Vulkan headers not found at ${VULKAN_INCLUDE_DIR}/vulkan/vulkan.h")
+    message(FATAL_ERROR "Vulkan headers not found. Set VULKAN_SDK environment variable or pass -DVULKAN_SDK=<path>.")
 endif()
+
+message(STATUS "Vulkan Include Dir: ${VULKAN_INCLUDE_DIR}")
 
 # Global output directories for generated build products
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
@@ -52,3 +59,26 @@ add_custom_command(TARGET VkLayer_neural_companion_passthrough POST_BUILD
         "$<TARGET_FILE_DIR:VkLayer_neural_companion_passthrough>/VkLayer_neural_companion_passthrough.json"
     COMMENT "Deploying VkLayer_neural_companion_passthrough.json to target output directory"
 )
+
+# Test executable for layer dispatch, query semantics, and unhandled forwarding
+add_executable(test_layer_dispatch
+    tests/test_layer_dispatch.cpp
+)
+
+target_include_directories(test_layer_dispatch PRIVATE
+    ${VULKAN_INCLUDE_DIR}
+)
+
+if(DEFINED VULKAN_LIB_DIR AND EXISTS "${VULKAN_LIB_DIR}/vulkan-1.lib")
+    target_link_libraries(test_layer_dispatch PRIVATE "${VULKAN_LIB_DIR}/vulkan-1.lib")
+elseif(TARGET Vulkan::Vulkan)
+    target_link_libraries(test_layer_dispatch PRIVATE Vulkan::Vulkan)
+else()
+    target_link_libraries(test_layer_dispatch PRIVATE vulkan-1)
+endif()
+
+if(MSVC)
+    target_compile_options(test_layer_dispatch PRIVATE
+        /W4 /WX- /permissive- /EHsc
+    )
+endif()

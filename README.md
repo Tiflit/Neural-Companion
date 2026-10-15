@@ -50,6 +50,55 @@ These documents are an initial planning baseline. Architecture details are propo
 
 Before using another repository to guide implementation, inspect its licence and record the intended use. Preserve required notices for any copied/adapted material, and cite material conceptual influence. Credit never substitutes for permission. No third-party implementation has been adopted; see the [source review rules](docs/SOURCE-REVIEW.md).
 
+## Building and Testing (Task 1: Vulkan Layer Pass-Through)
+
+### Prerequisites
+
+- Windows 10/11 x64
+- CMake 3.20 or newer
+- Visual Studio 2022 (MSVC with C++17 support)
+- LunarG Vulkan SDK (version 1.3 or 1.4) with the `VULKAN_SDK` environment variable pointing to the SDK installation directory (e.g. `C:\VulkanSDK\<version>`)
+
+### Build Instructions
+
+1. Configure the build directory:
+   ```powershell
+   cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+   ```
+   *Note: If `VULKAN_SDK` is not set in your environment, pass it explicitly with `-DVULKAN_SDK="<path-to-sdk>"`, or let CMake locate Vulkan via `find_package(Vulkan)`.*
+
+2. Compile the layer shared library and dispatch test binary:
+   ```powershell
+   cmake --build build --config Release
+   ```
+   Build products (`VkLayer_neural_companion_passthrough.dll`, `VkLayer_neural_companion_passthrough.json`, and `test_layer_dispatch.exe`) are placed in `build/bin/Release/` and excluded from source control.
+
+### Running the Validation Harness
+
+The repository includes an automated validation script (`scripts/run_sample_validation.ps1`) that executes:
+1. Pre-flight layer discovery and manifest validation.
+2. Focused unit tests verifying layer dispatch, query semantics, extension-disabled null returns, and unhandled forwarding (`test_layer_dispatch.exe`).
+3. Co-activated sample host execution with `VK_LAYER_KHRONOS_validation` on `vkcube.exe`, verifying:
+   - Simultaneous loader discovery and activation of both explicit layers.
+   - Zero validation errors or warnings emitted.
+   - Dynamic window resizing, swapchain recreation, and balanced swapchain lifecycle (`created == destroyed`).
+   - Exact requested presentation call counts forwarded downstream.
+4. Baseline run verifying clean deactivation and host operation with Neural-Companion disabled.
+
+To run the full validation suite:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_sample_validation.ps1
+```
+
+Optional parameters:
+- `-BuildDir <path>`: Output directory containing build artifacts (default: repository-relative `build\bin\Release`)
+- `-SdkDir <path>`: Root directory of LunarG Vulkan SDK (default: `$env:VULKAN_SDK`)
+- `-FrameCount <n>`: Target number of presentation calls for the sample run (default: `180`)
+- `-IncludeResizeTest` / `-IncludeResizeTest:$false`: Enable or disable window resize recreation testing (default: `$true`)
+- `-LogFile <path>`: Dedicated layer diagnostic log destination (default: `build\neural_companion_passthrough.log`)
+- `-HostLogFile <path>`: Host stdout/stderr and loader debug diagnostics log (default: `build\vkcube_host.log`)
+- `-BaselineLogFile <path>`: Baseline run diagnostics log (default: `build\vkcube_baseline.log`)
+
 ## Development workflow
 
 The owner's multi-agent workflow template is still being finalized. It will be applied separately. This draft does not introduce agent roles, an AGENTS.md, execution authorization profiles, CI policy, or a replacement workflow.
