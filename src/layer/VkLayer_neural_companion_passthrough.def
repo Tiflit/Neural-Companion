@@ -9,6 +9,9 @@ EXPORTS
     ncTestUnregisterMockDevice
     ncTestRecordFallbackQueue
     ncTestRegisterMockSwapchain
+    ncTestRegisterDeviceOwnedQueue
+    ncTestRegisterDeviceOwnedSwapchain
     ncTestGetFallbackQueueCount
+    ncTestGetFallbackSwapchainCount
     ncTestResetFallbackState
     ncTestGetPresentWrapper

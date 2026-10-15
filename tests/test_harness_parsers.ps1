@@ -130,7 +130,7 @@ function Assert-LayerPassThroughSummary(
 
 if (-not ([System.Management.Automation.PSTypeName]'NC.Win32Helper').Type) {
     Add-Type -MemberDefinition @'
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", SetLastError = true)]
         public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
         [DllImport("user32.dll")]
         public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
@@ -144,6 +144,21 @@ if (-not ([System.Management.Automation.PSTypeName]'NC.Win32Helper').Type) {
         public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool IsHungAppWindow(IntPtr hWnd);
+
+        public const uint SWP_NOSIZE = 0x0001;
+        public const uint SWP_NOMOVE = 0x0002;
+        public const uint SWP_NOZORDER = 0x0004;
+        public const uint SWP_NOACTIVATE = 0x0010;
+        public const uint SWP_FRAMECHANGED = 0x0020;
+        public const uint SWP_ASYNCWINDOWPOS = 0x4000;
+
+        public static bool AsyncResizeWindow(IntPtr hWnd, int x, int y, int width, int height) {
+            uint flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS | SWP_FRAMECHANGED;
+            return SetWindowPos(hWnd, IntPtr.Zero, x, y, width, height, flags);
+        }
 
         public static IntPtr FindCubeWindow(uint processId) {
             IntPtr foundHwnd = IntPtr.Zero;
@@ -209,15 +224,16 @@ function Invoke-ProcessBounded {
         [void]$proc.WaitForExit(3000)
         $proc.Refresh()
 
-        # Bounded read of stream tasks to avoid indefinite deadlocks
+        # Bounded read of stream tasks: incomplete capture must fail the run rather than masking diagnostics
         $streamDeadlineMs = 3000
         $tasksCompleted = [System.Threading.Tasks.Task]::WaitAll(@($outTask, $errTask), $streamDeadlineMs)
         if (-not $tasksCompleted) {
-            Write-Warning "Invoke-ProcessBounded: stream read tasks did not complete within $streamDeadlineMs ms"
+            try { $proc.Kill() } catch {}
+            throw "Assertion Failed: Incomplete stream capture: standard output and/or error tasks did not complete within $streamDeadlineMs ms for: $FilePath $Arguments"
         }
 
-        $stdout = if ($outTask.IsCompleted) { $outTask.Result } else { "" }
-        $stderr = if ($errTask.IsCompleted) { $errTask.Result } else { "" }
+        $stdout = $outTask.Result
+        $stderr = $errTask.Result
         $exitCode = $proc.ExitCode
 
         return [PSCustomObject]@{
@@ -437,6 +453,30 @@ Run-ParserTest "Positive: Valid 60 successful presentation calls and balanced sw
     )
     $res = Assert-LayerPassThroughSummary $fixture -expectedTotalCalls 60 -minExpectedSuccessfulCalls 60
     if ($res.SuccessfulCalls -ne 60 -or $res.Created -ne 1) { throw "Unexpected parsed result" }
+}
+
+# --- Tests for Asynchronous Window Positioning & Timeout Handling ---
+
+Run-ParserTest "Negative: Unresponsive child process exceeding deadline must be killed and throw timeout exception" {
+    $caught = $false
+    try {
+        Invoke-ProcessBounded -FilePath "powershell.exe" -Arguments "-NoProfile -Command Start-Sleep -Seconds 10" -TimeoutMs 500
+    } catch {
+        if ($_ -match "timed out after 500 ms and was terminated") {
+            $caught = $true
+        }
+    }
+    if (-not $caught) { throw "Expected timeout exception for unresponsive child, but command did not time out" }
+}
+
+Run-ParserTest "Positive: AsyncResizeWindow returns immediately without blocking across threads" {
+    $res = [NC.Win32Helper]::AsyncResizeWindow([IntPtr]::Zero, 100, 100, 680, 680)
+    if ($res -ne $false) { throw "Expected false for IntPtr.Zero handle" }
+}
+
+Run-ParserTest "Positive: IsHungAppWindow evaluates window responsiveness without error" {
+    $res = [NC.Win32Helper]::IsHungAppWindow([IntPtr]::Zero)
+    if ($res -ne $false) { throw "Expected false for IntPtr.Zero handle" }
 }
 
 Write-Host "================================================================="

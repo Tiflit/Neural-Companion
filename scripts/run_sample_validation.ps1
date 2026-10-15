@@ -113,7 +113,7 @@ if (-not (Test-Path $parserTestScript)) {
     exit 1
 }
 . $parserTestScript
-Write-Host "  [PASS] Acceptance check parser passed all 17 positive and negative tests.`n"
+Write-Host "  [PASS] Acceptance check parser passed all positive and negative tests.`n"
 
 # -------------------------------------------------------------------------
 # Step 2: Run Focused Layer Dispatch & Query Semantics Unit Test
@@ -185,15 +185,20 @@ try {
             if ($hwnd -eq [IntPtr]::Zero) {
                 Write-Error "Assertion Failed: Unable to acquire valid window handle (HWND) for PID $($p.Id) within 3000ms"
             } else {
+                # Check for unresponsive/hung window before resizing
+                if ([NC.Win32Helper]::IsHungAppWindow($hwnd)) {
+                    Write-Error "Assertion Failed: Discovered sample host window HWND $hwnd for PID $($p.Id) is unresponsive/hung"
+                }
                 # Allow vkcube to enter active rendering loop before triggering resize (demo->prepared == true)
                 Start-Sleep -Milliseconds 350
-                $resizeSuccess = [NC.Win32Helper]::MoveWindow($hwnd, 100, 100, 680, 680, $true)
+                # Use SetWindowPos with SWP_ASYNCWINDOWPOS to guarantee non-blocking cross-thread window resize per MS docs
+                $resizeSuccess = [NC.Win32Helper]::AsyncResizeWindow($hwnd, 100, 100, 680, 680)
                 if (-not $resizeSuccess) {
-                    Write-Error "Assertion Failed: MoveWindow failed to resize cooperating sample host window"
+                    Write-Error "Assertion Failed: AsyncResizeWindow failed to resize cooperating sample host window"
                 } else {
                     $lParam = [IntPtr]( (680 -shl 16) -bor 680 )
                     [void][NC.Win32Helper]::PostMessage($hwnd, 0x0005, [IntPtr]::Zero, $lParam)
-                    Write-Host "  [PASS] Triggered window resize event (500x500 -> 680x680, HWND: $hwnd)"
+                    Write-Host "  [PASS] Triggered asynchronous window resize event (500x500 -> 680x680, HWND: $hwnd)"
                 }
             }
         }

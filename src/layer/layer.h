@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 namespace neural_companion {
 
@@ -33,6 +34,9 @@ struct DeviceData {
     PFN_vkAcquireNextImageKHR vkAcquireNextImageKHR = nullptr;
     PFN_vkAcquireNextImage2KHR vkAcquireNextImage2KHR = nullptr;
     PFN_vkQueuePresentKHR vkQueuePresentKHR = nullptr;
+
+    std::vector<VkQueue> ownedQueues;
+    std::vector<VkSwapchainKHR> ownedSwapchains;
 };
 
 struct LayerStats {
@@ -60,7 +64,10 @@ VKAPI_ATTR bool VKAPI_CALL ncTestRegisterMockDevice(VkDevice device, PFN_vkQueue
 VKAPI_ATTR void VKAPI_CALL ncTestUnregisterMockDevice(VkDevice device);
 VKAPI_ATTR bool VKAPI_CALL ncTestRecordFallbackQueue(VkQueue queue, VkDevice device);
 VKAPI_ATTR bool VKAPI_CALL ncTestRegisterMockSwapchain(VkSwapchainKHR swapchain, VkDevice device, bool useFallbackTable);
+VKAPI_ATTR bool VKAPI_CALL ncTestRegisterDeviceOwnedQueue(VkDevice device, VkQueue queue);
+VKAPI_ATTR bool VKAPI_CALL ncTestRegisterDeviceOwnedSwapchain(VkDevice device, VkSwapchainKHR swapchain);
 VKAPI_ATTR size_t VKAPI_CALL ncTestGetFallbackQueueCount();
+VKAPI_ATTR size_t VKAPI_CALL ncTestGetFallbackSwapchainCount();
 VKAPI_ATTR void VKAPI_CALL ncTestResetFallbackState();
 VKAPI_ATTR PFN_vkQueuePresentKHR VKAPI_CALL ncTestGetPresentWrapper();
 

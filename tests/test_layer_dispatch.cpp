@@ -282,12 +282,16 @@ int main() {
         auto pfnUnregisterMockDevice = reinterpret_cast<decltype(&ncTestUnregisterMockDevice)>(GetProcAddress(hLayer, "ncTestUnregisterMockDevice"));
         auto pfnRecordFallbackQueue = reinterpret_cast<decltype(&ncTestRecordFallbackQueue)>(GetProcAddress(hLayer, "ncTestRecordFallbackQueue"));
         auto pfnRegisterMockSwapchain = reinterpret_cast<decltype(&ncTestRegisterMockSwapchain)>(GetProcAddress(hLayer, "ncTestRegisterMockSwapchain"));
+        auto pfnRegisterDeviceOwnedQueue = reinterpret_cast<decltype(&ncTestRegisterDeviceOwnedQueue)>(GetProcAddress(hLayer, "ncTestRegisterDeviceOwnedQueue"));
+        auto pfnRegisterDeviceOwnedSwapchain = reinterpret_cast<decltype(&ncTestRegisterDeviceOwnedSwapchain)>(GetProcAddress(hLayer, "ncTestRegisterDeviceOwnedSwapchain"));
         auto pfnGetFallbackQueueCount = reinterpret_cast<decltype(&ncTestGetFallbackQueueCount)>(GetProcAddress(hLayer, "ncTestGetFallbackQueueCount"));
+        auto pfnGetFallbackSwapchainCount = reinterpret_cast<decltype(&ncTestGetFallbackSwapchainCount)>(GetProcAddress(hLayer, "ncTestGetFallbackSwapchainCount"));
         auto pfnResetFallbackState = reinterpret_cast<decltype(&ncTestResetFallbackState)>(GetProcAddress(hLayer, "ncTestResetFallbackState"));
         auto pfnGetPresentWrapper = reinterpret_cast<decltype(&ncTestGetPresentWrapper)>(GetProcAddress(hLayer, "ncTestGetPresentWrapper"));
 
         TEST_ASSERT(pfnRegisterMockDevice && pfnUnregisterMockDevice && pfnRecordFallbackQueue &&
-                    pfnRegisterMockSwapchain && pfnGetFallbackQueueCount && pfnResetFallbackState &&
+                    pfnRegisterMockSwapchain && pfnRegisterDeviceOwnedQueue && pfnRegisterDeviceOwnedSwapchain &&
+                    pfnGetFallbackQueueCount && pfnGetFallbackSwapchainCount && pfnResetFallbackState &&
                     pfnGetPresentWrapper, "All test hooks must be exported and resolvable from layer DLL");
 
         PFN_vkQueuePresentKHR layerPresent = pfnGetPresentWrapper();
@@ -322,19 +326,34 @@ int main() {
 
         // Part B: Fallback table exhaustion
         pfnResetFallbackState();
-        TEST_ASSERT(pfnGetFallbackQueueCount() == 0, "Fallback table reset");
+        TEST_ASSERT(pfnGetFallbackQueueCount() == 0, "Fallback queue table reset");
+        TEST_ASSERT(pfnGetFallbackSwapchainCount() == 0, "Fallback swapchain table reset");
 
         // Fill all 128 fallback entries for Device A
         for (size_t i = 0; i < 128; ++i) {
             VkQueue q = reinterpret_cast<VkQueue>(static_cast<uintptr_t>(0x5000 + i));
-            TEST_ASSERT(pfnRecordFallbackQueue(q, mockDevA), "Fill fallback entry");
+            TEST_ASSERT(pfnRecordFallbackQueue(q, mockDevA), "Fill fallback queue entry");
         }
         TEST_ASSERT(pfnGetFallbackQueueCount() == 128, "Fallback queue table must be full (128 entries)");
 
+        // Fill all 64 fallback swapchain entries for Device A
+        for (size_t i = 0; i < 64; ++i) {
+            VkSwapchainKHR sc = reinterpret_cast<VkSwapchainKHR>(static_cast<uintptr_t>(0x6000 + i));
+            TEST_ASSERT(pfnRegisterMockSwapchain(sc, mockDevA, /*useFallbackTable=*/true), "Fill fallback swapchain entry");
+        }
+        TEST_ASSERT(pfnGetFallbackSwapchainCount() == 64, "Fallback swapchain table must be full (64 entries)");
+
         // Attempt to add a 129th queue (must fail to fit into fixed table)
         VkQueue queue129 = reinterpret_cast<VkQueue>(static_cast<uintptr_t>(0x9999));
-        pfnRecordFallbackQueue(queue129, mockDevA);
+        bool recQ129 = pfnRecordFallbackQueue(queue129, mockDevA);
+        TEST_ASSERT(!recQ129, "129th queue must fail to record into full fallback table");
         TEST_ASSERT(pfnGetFallbackQueueCount() == 128, "Fallback table must remain capped at 128");
+
+        // Attempt to add a 65th swapchain (must fail to fit into fixed table)
+        VkSwapchainKHR sc65 = reinterpret_cast<VkSwapchainKHR>(static_cast<uintptr_t>(0x9998));
+        bool recSc65 = pfnRegisterMockSwapchain(sc65, mockDevA, /*useFallbackTable=*/true);
+        TEST_ASSERT(!recSc65, "65th swapchain must fail to record into full fallback table");
+        TEST_ASSERT(pfnGetFallbackSwapchainCount() == 64, "Fallback swapchain table must remain capped at 64");
 
         // Subcase B.1: 129th untracked queue presented with NO swapchain
         // Must be rejected with VK_ERROR_INITIALIZATION_FAILED without cross-device guessing
@@ -347,21 +366,24 @@ int main() {
                     "Exhausted untracked queue must not dispatch to any device (no guessing)");
         std::cout << "  [PASS] Fallback exhaustion: untracked queue safely rejected without guessing\n";
 
-        // Subcase B.2: 129th untracked queue presented with swapchain owned by Device B
-        // Must route strictly to Device B via swapchain ownership even under queue table exhaustion
-        VkSwapchainKHR scB = reinterpret_cast<VkSwapchainKHR>(static_cast<uintptr_t>(0x7000));
-        TEST_ASSERT(pfnRegisterMockSwapchain(scB, mockDevB, /*useFallbackTable=*/true), "Register fallback swapchain for Device B");
+        // Subcase B.2: Dual fallback exhaustion with a valid owned queue/swapchain pair
+        // Proves uninterrupted pass-through forwarding when both fixed fallback tables are completely full
+        VkQueue validQueueB = reinterpret_cast<VkQueue>(static_cast<uintptr_t>(0x8001));
+        VkSwapchainKHR validScB = reinterpret_cast<VkSwapchainKHR>(static_cast<uintptr_t>(0x8002));
+        TEST_ASSERT(pfnRegisterDeviceOwnedQueue(mockDevB, validQueueB), "Register owned queue on Device B");
+        TEST_ASSERT(pfnRegisterDeviceOwnedSwapchain(mockDevB, validScB), "Register owned swapchain on Device B");
 
-        VkPresentInfoKHR scBPresentInfo{};
-        scBPresentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        scBPresentInfo.swapchainCount = 1;
-        scBPresentInfo.pSwapchains = &scB;
+        VkPresentInfoKHR dualExhaustedInfo{};
+        dualExhaustedInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        dualExhaustedInfo.swapchainCount = 1;
+        dualExhaustedInfo.pSwapchains = &validScB;
 
-        VkResult resScB = layerPresent(queue129, &scBPresentInfo);
-        TEST_ASSERT(resScB == VK_SUCCESS, "Present with Device B swapchain must succeed");
-        TEST_ASSERT(g_mockPresentBCalls == preCallsB + 1, "Must dispatch strictly to Device B (swapchain owner)");
+        VkResult resDual = layerPresent(validQueueB, &dualExhaustedInfo);
+        TEST_ASSERT(resDual == VK_SUCCESS, "Present with valid owned queue/swapchain pair under dual exhaustion must succeed");
+        TEST_ASSERT(g_mockPresentBCalls == preCallsB + 1, "Must dispatch strictly to Device B");
         TEST_ASSERT(g_mockPresentACalls == preCallsA, "Must NOT dispatch to Device A");
-        std::cout << "  [PASS] Swapchain ownership routing verified under fallback exhaustion\n";
+        TEST_ASSERT(g_lastQueueSeenB == validQueueB, "Device B must receive validQueueB");
+        std::cout << "  [PASS] Dual fallback exhaustion: valid owned queue/swapchain pair uninterrupted pass-through verified\n";
 
         // Teardown mock devices
         pfnUnregisterMockDevice(mockDevA);
