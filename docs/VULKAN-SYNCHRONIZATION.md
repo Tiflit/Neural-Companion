@@ -21,6 +21,10 @@ This specification incorporates the findings from all architectural and synchron
 | **9. `OUT_OF_DATE` Semaphore Consumption** | Claiming `VK_ERROR_OUT_OF_DATE_KHR` leaves wait semaphores unconsumed. | **§5.4 & §7.2**: Corrected to match Vulkan WSI specification: semaphore waits *are* executed by WSI even on out-of-date returns; semaphores are consumed and retired via presentation fences. |
 | **10. Queue Submission Failure Granularity** | Conflating OOM errors with device loss. | **§7.2**: Distinguished `VK_ERROR_OUT_OF_HOST_MEMORY` / `OUT_OF_DEVICE_MEMORY` (semaphores unconsumed, no downstream present, `pResults` populated) from `VK_ERROR_DEVICE_LOST`. |
 | **11. Validation Criteria & Overhead Targets** | Inventing an unsupported "$\le 0.1\%$ overhead" gate without baseline evidence. | **§8**: Removed arbitrary target; replaced with empirical frame-time distribution measurements and fault-injection test matrix. |
+| **12. Preservation of In-Flight State Across Failures** | Overwriting existing presentation/drain states on pre-submit rejection or submit OOM, abandoning prior in-flight presentation work. | **§6.1 & §7**: Corrected pre-submit rejection and submit failure paths to explicitly preserve existing command, presentation, and drain states for `imageIndex`. |
+| **13. Drain Fence Reset & Wait-Stage Mask** | Submitting an unreset (signaled) drain fence; omitting `pWaitDstStageMask` on empty-command-buffer drain submissions. | **§5.5 & §6.1**: Added checked wait for prior drain, explicit late reset immediately prior to submit, `pWaitDstStageMask = &drainWaitStage`, and `DrainState::DrainFailed` handling. |
+| **14. Presentation Error Classification & Surface Loss** | Treating surface loss and fullscreen-exclusive loss as enqueue failures triggering redundant semaphore drains; risking queue hangs. | **§5.4, §6.1, & §7**: Classified `VK_ERROR_SURFACE_LOST_KHR` and `VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT` as enqueued WSI operations where semaphores are consumed. Restricted tracked drain strictly to non-enqueued OOM. Added terminal device loss handling. |
+| **15. Tainted Image Retry Return Code & Evaluation Order** | Unspecified return code and evaluation ordering when the host retries presenting an already-tinted unpresented image. | **§5.5 & §6.1**: Evaluated `imageTaintState` as Step 0 at entry of `vkQueuePresentKHR`. Immediately returns `VK_ERROR_OUT_OF_DATE_KHR` (populating `pResults[0]`) to force swapchain recreation. |
 
 ---
 
@@ -207,14 +211,18 @@ Rather than relying on ungrounded frame-count heuristics ($K$ elapsed frames) or
      presentFenceInfo.swapchainCount = 1;
      presentFenceInfo.pFences = &presentFence[imageIndex];
      ```
-   * **Present Outcome**:
-     * If downstream present returns `VK_SUCCESS`, `VK_SUBOPTIMAL_KHR`, or `VK_ERROR_OUT_OF_DATE_KHR`: The operation was enqueued to WSI. The layer sets `presentState[imageIndex] = PresentationState::Pending`.
-     * If downstream present returns `VK_ERROR_OUT_OF_HOST_MEMORY` or `VK_ERROR_OUT_OF_DEVICE_MEMORY`: The present was **not enqueued**. The layer sets `presentState[imageIndex] = PresentationState::NotEnqueued`. The fence will never be signaled by WSI, and the layer will **never wait** on it.
+    * **Present Outcome**:
+      * **Enqueued WSI Outcomes (`presentState[imageIndex] = PresentationState::Pending`)**:
+        If downstream present returns `VK_SUCCESS`, `VK_SUBOPTIMAL_KHR`, `VK_ERROR_OUT_OF_DATE_KHR`, `VK_ERROR_SURFACE_LOST_KHR`, or `VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT`: The operation was enqueued to WSI. Per the Vulkan specification, semaphore wait operations *are* executed by the presentation engine / driver for all of these returns. Wait semaphores are consumed, and the associated `presentFence[imageIndex]` will be signaled upon WSI completion. The layer sets `presentState[imageIndex] = PresentationState::Pending`.
+      * **Non-Enqueued Present OOM (`presentState[imageIndex] = PresentationState::NotEnqueued`)**:
+        If downstream present returns `VK_ERROR_OUT_OF_HOST_MEMORY` or `VK_ERROR_OUT_OF_DEVICE_MEMORY`: The present was **not enqueued** to WSI. Wait semaphores were not enqueued to the presentation engine. The layer sets `presentState[imageIndex] = PresentationState::NotEnqueued`. The presentation fence was not enqueued and will never be signaled by WSI; the layer will **never wait** on it. Because `renderCompleteSemaphore[imageIndex]` was signaled by the layer's submit but not consumed by WSI, the layer executes the tracked semaphore drain (§5.5).
+      * **Terminal Device Loss**:
+        If downstream present returns `VK_ERROR_DEVICE_LOST`: The physical or logical device has become unavailable. The layer transitions to a terminal device-lost state; no further queue submissions, semaphore drains, or fence waits are permitted.
 3. **Fence Guarantee Clarification**:
    * A signaled presentation fence guarantees the Vulkan-specified safe point for resource destruction and reuse; it does not necessarily imply physical photon emission on display hardware.
 4. **Swapchain Recreation & Destruction Lifecycle**:
    * **`VK_SUBOPTIMAL_KHR`**: This is a success code. The present was enqueued and will be retired via `presentFence`. The swapchain remains active; no immediate destruction occurs until the host initiates recreation.
-   * **`VK_ERROR_OUT_OF_DATE_KHR`**: Per the Vulkan specification, semaphore waits *are* executed by WSI even on out-of-date returns. The present fence is associated with that present and will signal upon WSI release.
+   * **`VK_ERROR_OUT_OF_DATE_KHR`, `VK_ERROR_SURFACE_LOST_KHR`, & `VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT`**: Per the Vulkan specification, semaphore waits *are* executed by WSI on these returns. The present fence is associated with that present and will signal upon WSI release. The layer never drains semaphores on these errors, avoiding deadlocks with active WSI waits.
    * **Swapchain Destruction (`vkDestroySwapchainKHR`)**:
      * When a swapchain is destroyed, the layer iterates through all swapchain images $i \in [0, \text{imageCount}-1]$:
      * If `cmdState[i] == CommandSubmitState::InFlight`: `vkWaitForFences(device, 1, &inFlightFence[i], VK_TRUE, UINT64_MAX)`.
@@ -224,21 +232,47 @@ Rather than relying on ungrounded frame-count heuristics ($K$ elapsed frames) or
      * Cleanly destroy all semaphores, fences, image views, and framebuffers.
 
 ### 5.5 Tracked Semaphore Drain on Present Enqueue OOM & Tainted Image Policy
-When `vkQueueSubmit` succeeds but downstream `vkQueuePresentKHR` fails with OOM (`VK_ERROR_OUT_OF_HOST_MEMORY` / `VK_ERROR_OUT_OF_DEVICE_MEMORY`):
+When `vkQueueSubmit` succeeds but downstream `vkQueuePresentKHR` fails with non-enqueued OOM (`VK_ERROR_OUT_OF_HOST_MEMORY` / `VK_ERROR_OUT_OF_DEVICE_MEMORY`):
 1. **Asynchronous Drain Execution**:
    * Host wait semaphores were consumed by the effect submit, and `renderCompleteSemaphore[imageIndex]` is queued to signal.
    * The present was not enqueued, so WSI will not wait on `renderCompleteSemaphore[imageIndex]`.
    * The layer waits for `inFlightFence[imageIndex]` to ensure the effect submit finishes on the GPU (`cmdState[imageIndex] = CommandSubmitState::Unused`).
-   * The layer submits an explicit **semaphore-wait-only submission** (a `VkSubmitInfo` with `waitSemaphoreCount = 1`, `pWaitSemaphores = &renderCompleteSemaphore[imageIndex]`, `commandBufferCount = 0`, signaling a dedicated `drainFence[imageIndex]`).
-   * `drainState[imageIndex] = DrainState::Pending`.
-   * The layer calls `vkWaitForFences(device, 1, &drainFence[imageIndex], VK_TRUE, UINT64_MAX)`.
-   * `drainState[imageIndex] = DrainState::Completed`.
-   * If the drain submit itself returns OOM or device loss, `drainState[imageIndex] = DrainState::DrainFailed`; the layer does not loop indefinitely.
+   * **Checked Prior Drain Wait**: If `drainState[imageIndex] == DrainState::Pending`, the layer calls `vkWaitForFences(device, 1, &drainFence[imageIndex], VK_TRUE, UINT64_MAX)` to retire any prior drain, then sets `drainState[imageIndex] = DrainState::Completed`.
+   * **Late Drain Fence Reset**: `drainFence[imageIndex]` is created in the signaled state, but Vulkan requires submitted fences to be unsignaled. The layer executes `vkResetFences(device, 1, &drainFence[imageIndex])` **immediately prior** to submitting the drain.
+   * **Drain Submit Construction**:
+     * The layer submits an explicit **semaphore-wait-only submission**:
+       ```cpp
+       VkPipelineStageFlags drainWaitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+       VkSubmitInfo drainSubmitInfo{};
+       drainSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+       drainSubmitInfo.waitSemaphoreCount = 1;
+       drainSubmitInfo.pWaitSemaphores = &renderCompleteSemaphore[imageIndex];
+       drainSubmitInfo.pWaitDstStageMask = &drainWaitStage; // Required: exactly 1 mask per wait semaphore
+       drainSubmitInfo.commandBufferCount = 0;
+       drainSubmitInfo.pCommandBuffers = nullptr;
+       ```
+     * The layer calls `vkQueueSubmit(queue, 1, &drainSubmitInfo, drainFence[imageIndex])`.
+   * **Drain Outcome & Conditioned Wait**:
+     * If `vkQueueSubmit` **succeeds**:
+       * The layer sets `drainState[imageIndex] = DrainState::Pending`.
+       * The layer immediately waits for the drain: `vkWaitForFences(device, 1, &drainFence[imageIndex], VK_TRUE, UINT64_MAX)`.
+       * Upon completion, the layer sets `drainState[imageIndex] = DrainState::Completed`.
+     * If `vkQueueSubmit` **fails** (OOM or `VK_ERROR_DEVICE_LOST`):
+       * The layer sets `drainState[imageIndex] = DrainState::DrainFailed`.
+       * The layer does **not wait** on `drainFence[imageIndex]` (it was not enqueued and remains unsignaled), avoiding a permanent CPU hang.
+       * The layer marks the swapchain/device as errored and halts further queue operations without infinite retry loops.
 2. **Tainted Image & Host Retry Policy**:
-   * The swapchain image remains acquired by the application and is already tinted on the GPU, while original host waits were consumed.
-   * The layer marks image index $i$ as `TaintedUnpresented`.
-   * If the host attempts to present that same image index again without re-rendering, forwarding it would re-wait consumed semaphores, and re-processing it would apply a second tint pass.
-   * Therefore, under this prototype contract, transparent recovery of a tainted unpresented image is out of scope. Any retry of a `TaintedUnpresented` image is rejected with an explicit error code, requiring host swapchain recreation.
+   * The swapchain image remains acquired by the application and has already been modified (tinted) on the GPU, while original host waits were consumed.
+   * The layer marks image index $i$ as `ImageTaintState::TaintedUnpresented`.
+   * **Evaluation Order in `vkQueuePresentKHR`**:
+     * Upon entry to `vkQueuePresentKHR`, the layer inspects `imageTaintState[imageIndex]` **first** (Step 0), before contract checks, pass-through decisions, or command recording.
+   * **Concrete Error Code & Rejection**:
+     * If `imageTaintState[imageIndex] == ImageTaintState::TaintedUnpresented`:
+       * If `pPresentInfo->pResults != nullptr`, the layer sets `pPresentInfo->pResults[0] = VK_ERROR_OUT_OF_DATE_KHR`.
+       * The layer immediately returns **`VK_ERROR_OUT_OF_DATE_KHR`** without recording commands, submitting to queues, or forwarding to downstream WSI.
+   * **Rationale**:
+     * Forwarding the retried call would wait on already-consumed host semaphores; re-processing the image would apply a duplicate tint pass over already-modified pixels.
+     * Returning `VK_ERROR_OUT_OF_DATE_KHR` conforms to standard Vulkan WSI conventions, explicitly notifying the host application that the swapchain must be recreated. This guarantees safe destruction and recreation of swapchain images and synchronization objects.
 
 ---
 
@@ -254,13 +288,20 @@ For each supported frame presented through `vkQueuePresentKHR(queue, pPresentInf
        ▼ (Signals hostWaitSemaphores[0..M-1])
 [Layer vkQueuePresentKHR Intercept]
        │
-       ├─► Validation Check (Contract Pass, swapchainMaintenance1 enabled, & M >= 1?)
+       ├─► Step 0: Tainted Image Check
+       │      If imageTaintState[imageIndex] == TaintedUnpresented:
+       │         Set pResults[0] = VK_ERROR_OUT_OF_DATE_KHR (if pResults != nullptr)
+       │         Return VK_ERROR_OUT_OF_DATE_KHR (Force host swapchain recreation)
+       │
+       ├─► Step 0b: Validation Check (Contract Pass, swapchainMaintenance1 enabled, & M >= 1?)
        │      ├─ NO  ──► Forward pPresentInfo unchanged (Pre-Submit Rejection)
+       │      │          (Preserve existing cmdState, presentState, and drainState for imageIndex)
        │      └─ YES ──► Proceed to Step 1
        │
 [Step 1: Check In-Flight State & Reset Command Buffer]
        │  ├─ If cmdState[imageIndex] == InFlight:
        │  │     vkWaitForFences(device, 1, &inFlightFence[imageIndex], VK_TRUE, UINT64_MAX)
+       │  │     cmdState[imageIndex] = Unused
        │  └─ vkResetCommandBuffer(commandBuffers[imageIndex], 0)
        │
 [Step 2: Record Layer Command Buffer]
@@ -283,7 +324,9 @@ For each supported frame presented through `vkQueuePresentKHR(queue, pPresentInf
        │  └─ vkQueueSubmit(...)
        │
        ├─► Submit Succeeded?
-       │      ├─ NO (OOM / Lost) ──► Handle Submit Failure (Section 7.2)
+       │      ├─ NO (OOM / Lost) ──► cmdState[imageIndex] = SubmitFailed;
+       │      │                      Preserve existing presentState[imageIndex] and drainState[imageIndex];
+       │      │                      Populate pResults; Return error (Section 7)
        │      └─ YES             ──► cmdState[imageIndex] = InFlight; Proceed to Step 4
        │
 [Step 4: Presentation Fence Wait, Late Reset & Downstream Presentation]
@@ -299,9 +342,14 @@ For each supported frame presented through `vkQueuePresentKHR(queue, pPresentInf
        │  │    pResults           = pPresentInfo->pResults
        │  └─ Downstream vkQueuePresentKHR(...)
        │
-       ├─► Present Succeeded or WSI Rejection?
-       │      ├─ YES (Success / Suboptimal / OutOfDate) ──► presentState[imageIndex] = Pending
-       │      └─ NO (Present OOM / Enqueue Failure)    ──► presentState[imageIndex] = NotEnqueued; Execute Tracked Drain (Section 5.5)
+       ├─► Downstream Present Result Classification:
+       │      ├─ Enqueued to WSI: (VK_SUCCESS, VK_SUBOPTIMAL_KHR, VK_ERROR_OUT_OF_DATE_KHR,
+       │      │                    VK_ERROR_SURFACE_LOST_KHR, VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)
+       │      │     ──► presentState[imageIndex] = Pending (Semaphores consumed; presentFence will signal)
+       │      ├─ Non-Enqueued Present OOM: (VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_OUT_OF_DEVICE_MEMORY)
+       │      │     ──► presentState[imageIndex] = NotEnqueued; Execute Tracked Drain (Section 5.5)
+       │      └─ Device Lost: (VK_ERROR_DEVICE_LOST)
+       │            ──► Transition to DeviceLost; halt queue operations; do not drain or wait fences
        │
        ▼
 [Return Outcome to Caller]
@@ -347,16 +395,18 @@ The layer partitions execution and failure handling into a single unified state 
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Initial / First Use** | `Unused` | `Unused` | `None` | `inFlightFence` signaled; `presentFence` signaled; `drainFence` signaled. | Initial state after swapchain allocation. No waits performed. |
 | **Normal Frame Success** | `InFlight` | `Pending` | `None` | Host semaphores consumed; `renderCompleteSemaphore` signaled; `presentFence` enqueued to WSI. | Effect rendered and presented. Frame returns `VK_SUCCESS`. |
-| **Pre-Submit Rejection** | `Unused` | `Unused` | `None` | Host semaphores completely untouched and unconsumed by layer. | Contract pass-through: caller `VkPresentInfoKHR` forwarded untouched. |
-| **Submit OOM** | `SubmitFailed` | `Unused` | `None` | Host semaphores unconsumed; `inFlightFence` was reset but not enqueued. `renderCompleteSemaphore` unsignaled. | Do not present. Populate `pResults`. Return OOM error. Next frame does not hang. |
-| **Submit Device Lost** | `SubmitFailed` | `Unused` | `None` | Device in lost state. | Do not present. Populate `pResults`. Return `VK_ERROR_DEVICE_LOST`. |
-| **Present OOM (Submit OK)** | `InFlight` $\rightarrow$ `Unused` | `NotEnqueued` | `Pending` $\rightarrow$ `Completed` | Host semaphores consumed. `renderCompleteSemaphore` signaled, then drained via `drainFence`. | Wait `inFlightFence`; submit semaphore-wait-only drain. Mark `TaintedUnpresented`. Return OOM. |
-| **Present OOM Drain Fail** | `Unused` | `NotEnqueued` | `DrainFailed` | Drain submit failed with OOM/DeviceLost. | Fatal drain error. Mark device/swapchain invalid. Return error to caller. |
-| **WSI `VK_SUBOPTIMAL_KHR`** | `InFlight` | `Pending` | `None` | Present was enqueued; semaphores consumed; `presentFence` pending. | Success code. Return `VK_SUBOPTIMAL_KHR`. Swapchain remains active. |
-| **WSI `VK_ERROR_OUT_OF_DATE_KHR`** | `InFlight` | `Pending` | `None` | Present was enqueued; semaphores consumed; `presentFence` pending. | Return `VK_ERROR_OUT_OF_DATE_KHR`. Host initiates recreation. |
-| **Swapchain Recreation** | Drain old frames | Drain old fences | Drain active | Wait `inFlightFence` (if InFlight), `drainFence` (if Pending), `presentFence` (if Pending). | Cleanly transition to new swapchain. Old resources destroyed after fences signal. |
-| **Swapchain Destruction** | Drain in-flight | Drain pending | Drain pending | Wait pending fences; do NOT wait on `NotEnqueued` or `Unused` fences. | Cleanly destroy all per-image semaphores, fences, and views. |
-| **Device Teardown** | Device idle | Drain all | Drain all | `vkDeviceWaitIdle(device)`. Wait remaining fences. Destroy all resources. | Zero resource leaks; clean unload. |
+| **Pre-Submit Rejection** | `Preserved (Unchanged)` | `Preserved (Unchanged)` | `Preserved (Unchanged)` | Host semaphores completely untouched and unconsumed by layer. All slot states and fences preserved. | Contract pass-through: caller `VkPresentInfoKHR` forwarded untouched. Does NOT discard or overwrite pending in-flight presentation work from prior frames. |
+| **Submit OOM** | `SubmitFailed` | `Preserved (Unchanged)` | `Preserved (Unchanged)` | Host semaphores unconsumed; `inFlightFence` was reset but not enqueued. `renderCompleteSemaphore` unsignaled. Prior `presentState` remains intact. | Do not present. Populate `pResults`. Return OOM error. Prior pending presentation fences remain tracked. Next frame does not hang. |
+| **Submit Device Lost** | `SubmitFailed` | `Terminal DeviceLost` | `Terminal DeviceLost` | Device in lost state. | Terminal failure. Do not present. Populate `pResults`. Return `VK_ERROR_DEVICE_LOST`. Halt further queue operations. |
+| **Present Enqueue OOM (Submit OK)** | `InFlight` $\rightarrow$ `Unused` | `NotEnqueued` | `Pending` $\rightarrow$ `Completed` | Host semaphores consumed. `renderCompleteSemaphore` signaled, then drained via `drainFence` with pre-submit reset and `pWaitDstStageMask`. | Wait `inFlightFence`; reset `drainFence`; submit semaphore-wait-only drain; wait `drainFence`. Mark `TaintedUnpresented`. Return OOM error. |
+| **Present Enqueue OOM Drain Fail** | `Unused` | `NotEnqueued` | `DrainFailed` | Drain submit failed with OOM/DeviceLost. `drainFence` unsubmitted. | Fatal drain error. Mark device/swapchain invalid. Do not wait on unsubmitted `drainFence`. Return error to caller. |
+| **WSI Enqueued Success / Suboptimal** | `InFlight` | `Pending` | `None` | Present was enqueued; semaphores consumed; `presentFence` pending signal. | Return `VK_SUCCESS` or `VK_SUBOPTIMAL_KHR`. Swapchain remains active. |
+| **WSI Enqueued Error (Out of Date, Surface Lost, Fullscreen Lost)** | `InFlight` | `Pending` | `None` | Present operation was enqueued to WSI; semaphore waits are executed by WSI; `presentFence` pending signal. | Return error code (`VK_ERROR_OUT_OF_DATE_KHR`, `VK_ERROR_SURFACE_LOST_KHR`, or `VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT`). Semaphores are NOT drained (doing so would race/hang). Host initiates swapchain recreation or surface recovery. |
+| **TaintedUnpresented Retry Attempt** | `Preserved (Unchanged)` | `NotEnqueued` | `Completed` | No queue operations or submissions performed. | Evaluated as Step 0 at entry of `vkQueuePresentKHR`. Immediately set `pResults[0] = VK_ERROR_OUT_OF_DATE_KHR` (if provided) and return `VK_ERROR_OUT_OF_DATE_KHR`. Forces host swapchain recreation. |
+| **Present Device Lost** | `InFlight` | `Terminal DeviceLost` | `Terminal DeviceLost` | Device lost returned from downstream present. | Terminal failure. Return `VK_ERROR_DEVICE_LOST`. Halt further queue operations. Do not attempt drain or fence waits. |
+| **Swapchain Recreation** | Drain old frames | Drain old fences | Drain active | Wait `inFlightFence` (if `InFlight`), `drainFence` (if `Pending`), `presentFence` (if `Pending`). Do NOT wait on `NotEnqueued`, `Unused`, or `DrainFailed`. | Cleanly transition to new swapchain. Old resources destroyed after fences signal. |
+| **Swapchain Destruction** | Drain in-flight | Drain pending | Drain pending | Wait pending fences; do NOT wait on `NotEnqueued`, `Unused`, or `SubmitFailed` fences. | Cleanly destroy all per-image semaphores, fences, and views. |
+| **Device Teardown** | Device idle | Drain all | Drain all | `vkDeviceWaitIdle(device)`. Wait remaining pending fences. Destroy all resources. | Zero resource leaks; clean unload. |
 
 ---
 
@@ -383,11 +433,15 @@ The layer will be validated using an incremental, four-step verification suite w
    * Mode: `NC_LAYER_MODE=reference_tint`.
    * Test: Verify fixed-function blending executes. Verify image output displays constant 15% warm amber tint without alpha clipping or edge artifacts.
 4. **Step 4: Resilience & Fault Injection**:
-   * **Dynamic Resize**: Repeated window resizing forcing `VK_ERROR_OUT_OF_DATE_KHR` and `VK_SUBOPTIMAL_KHR`; verify clean recreation without validation errors.
-   * **Minimization**: Window minimization (handling extent `0x0`); verify pre-submit bypass without allocation.
-   * **Host Wait $M=0$ Check**: Host presentation with 0 wait semaphores; verify clean pre-submit rejection.
-   * **Simulated Submit OOM**: Verify clean non-presentation, unconsumed host semaphores, and no permanent fence hangs (`cmdState = SubmitFailed`).
-   * **Simulated Present OOM**: Verify tracked semaphore-wait-only drain with `drainFence` without validation leaks, and verify rejection on retry of `TaintedUnpresented` image.
+   * **Dynamic Resize & Suboptimal**: Repeated window resizing forcing `VK_ERROR_OUT_OF_DATE_KHR` and `VK_SUBOPTIMAL_KHR`; verify presentation fence completion and clean swapchain recreation without validation errors.
+   * **Surface Loss & Fullscreen-Exclusive Loss**: Inject `VK_ERROR_SURFACE_LOST_KHR` and `VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT` on `vkQueuePresentKHR`; verify the layer classifies them as enqueued WSI operations (`presentState = Pending`), consumes semaphores, does not trigger redundant semaphore drains, and safely returns errors.
+   * **Minimization**: Window minimization (handling extent `0x0`); verify pre-submit bypass without resource allocation.
+   * **Host Wait $M=0$ Check**: Host presentation with 0 wait semaphores; verify clean pre-submit rejection preserving caller present info.
+   * **Simulated Submit OOM with Prior Present Pending**: Inject `VK_ERROR_OUT_OF_DEVICE_MEMORY` during `vkQueueSubmit` while a previous presentation is pending for the same slot; verify `cmdState = SubmitFailed`, existing `presentState` is preserved, prior `presentFence` is not abandoned, host semaphores remain unconsumed, and future frames do not hang.
+   * **Simulated Present Enqueue OOM with Tracked Drain**: Inject `VK_ERROR_OUT_OF_HOST_MEMORY` / `OUT_OF_DEVICE_MEMORY` on downstream `vkQueuePresentKHR`; verify layer waits on `inFlightFence`, resets `drainFence`, provides `pWaitDstStageMask` (`VK_PIPELINE_STAGE_ALL_COMMANDS_BIT`), submits and waits on `drainFence`, marks slot `TaintedUnpresented`, and returns OOM error without validation leaks.
+   * **Simulated Present Enqueue OOM with Drain Submit Failure**: Inject submit failure (`VK_ERROR_OUT_OF_DEVICE_MEMORY` or `VK_ERROR_DEVICE_LOST`) on the drain submission itself; verify transition to `DrainState::DrainFailed`, that the layer does not wait on the un-enqueued `drainFence`, no infinite loop occurs, and error is returned cleanly.
+   * **Tainted Image Retry Evaluation**: Attempt to call `vkQueuePresentKHR` on an image in `TaintedUnpresented` state; verify the layer evaluates `imageTaintState` as Step 0 at entry of `vkQueuePresentKHR` (prior to pass-through or contract checks), sets `pResults[0] = VK_ERROR_OUT_OF_DATE_KHR` (if provided), and returns `VK_ERROR_OUT_OF_DATE_KHR` to force swapchain recreation without double-tinting or hung semaphores.
+   * **Device Loss Terminal Path**: Inject `VK_ERROR_DEVICE_LOST` during submit or downstream present; verify transition to `DeviceLost` state and immediate halt of queue operations without hanging on fences.
    * **Missing Maintenance1 Check**: Run on host without `swapchainMaintenance1`; verify clean pass-through.
    * **Clean Process Shutdown**: Verify zero leaks reported by validation layer on process exit.
 5. **Step 5: Translated D3D11 Route via DXVK 3.1.1 (Isolated Game Host)**:
