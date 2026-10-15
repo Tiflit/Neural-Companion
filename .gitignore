@@ -1,0 +1,26 @@
+# Build directories and generated artifacts
+/build/
+/out/
+CMakeCache.txt
+CMakeFiles/
+*.dir/
+*.vcxproj*
+*.sln
+*.user
+*.log
+
+# Binaries and libraries
+*.dll
+*.exe
+*.exp
+*.lib
+*.pdb
+*.ilk
+
+# VS Code / Visual Studio
+.vs/
+.vscode/
+
+# Python / Scripts
+__pycache__/
+*.pyc
