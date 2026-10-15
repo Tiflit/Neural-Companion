@@ -14,19 +14,40 @@ The repository's MIT licence applies to project-authored material. It does not r
 
 The project build system references header files from the Khronos Vulkan API registry and LunarG Vulkan SDK during compilation. These headers are not vendored or redistributed in this repository; they are located on the developer's system via the `VULKAN_SDK` environment variable or standard CMake package resolution (`find_package(Vulkan)`).
 
-### Khronos Vulkan Headers (`vulkan/vulkan.h`, `vulkan/vk_layer.h`, `vulkan/vulkan_core.h`)
+### Khronos Vulkan Headers: Exact Per-File Provenance and Copyright Record
 
-- **Component:** Khronos Vulkan Headers / Registry
+The installed SDK headers inspected in the local build environment (`1.4.363.0`) contain the following exact per-file copyright and provenance notices:
+
+#### 1. `vulkan/vulkan.h`
 - **Origin:** The Khronos Group Inc. (https://github.com/KhronosGroup/Vulkan-Headers)
-- **Version Pinned in SDK:** 1.4.363.0 (Vulkan API version 1.4)
-- **Licence Terms:** Apache License, Version 2.0 OR MIT
-- **Copyright:** Copyright 2015-2024 The Khronos Group Inc.
+- **Copyright:** Copyright 2015-2026 The Khronos Group Inc.
+- **Licence Terms:** Apache License, Version 2.0 OR MIT (SPDX-License-Identifier: Apache-2.0 OR MIT)
+
+#### 2. `vulkan/vulkan_core.h`
+- **Origin:** The Khronos Group Inc. (XML API Registry generation)
+- **Copyright:** Copyright 2015-2026 The Khronos Group Inc.
+- **Licence Terms:** Apache License, Version 2.0 OR MIT (SPDX-License-Identifier: Apache-2.0 OR MIT)
+
+#### 3. `vulkan/vk_platform.h`
+- **Origin:** The Khronos Group Inc.
+- **Copyright:** Copyright 2014-2026 The Khronos Group Inc.
+- **Licence Terms:** Apache License, Version 2.0 OR MIT (SPDX-License-Identifier: Apache-2.0 OR MIT)
+
+#### 4. `vulkan/vk_layer.h`
+- **Origin:** The Khronos Group Inc., Valve Corporation, and LunarG, Inc.
+- **Copyright:**
+  - Copyright 2015-2023 The Khronos Group Inc.
+  - Copyright 2015-2023 Valve Corporation
+  - Copyright 2015-2023 LunarG, Inc.
+- **Licence Terms:** Apache License, Version 2.0 OR MIT (SPDX-License-Identifier: Apache-2.0 OR MIT)
+
+---
+
+### Dual-Licence Texts (Apache-2.0 OR MIT)
 
 #### Apache License, Version 2.0 Notice:
 
 ```
-Copyright 2015-2024 The Khronos Group Inc.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -43,8 +64,6 @@ limitations under the License.
 #### MIT Licence Notice:
 
 ```
-Copyright 2015-2024 The Khronos Group Inc.
-
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

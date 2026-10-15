@@ -28,6 +28,92 @@ std::unordered_map<VkInstance, std::unique_ptr<neural_companion::InstanceData>> 
 std::unordered_map<VkPhysicalDevice, neural_companion::InstanceData*> g_physDeviceToInstanceMap;
 std::unordered_map<VkDevice, std::unique_ptr<neural_companion::DeviceData>> g_deviceMap;
 std::unordered_map<VkQueue, neural_companion::DeviceData*> g_queueToDeviceMap;
+std::unordered_map<VkSwapchainKHR, neural_companion::DeviceData*> g_swapchainToDeviceMap;
+
+// Fixed-capacity fallback table for queues to guarantee pass-through forwarding
+// even when dynamic memory allocation for std::unordered_map fails.
+struct FallbackQueueEntry {
+    VkQueue queue = VK_NULL_HANDLE;
+    neural_companion::DeviceData* devData = nullptr;
+};
+static constexpr size_t kMaxFallbackQueues = 128;
+static FallbackQueueEntry g_fallbackQueues[kMaxFallbackQueues]{};
+static size_t g_fallbackQueueCount = 0;
+
+static void RecordFallbackQueueLocked(VkQueue queue, neural_companion::DeviceData* devData) noexcept {
+    if (queue == VK_NULL_HANDLE || !devData) return;
+    for (size_t i = 0; i < g_fallbackQueueCount; ++i) {
+        if (g_fallbackQueues[i].queue == queue) {
+            g_fallbackQueues[i].devData = devData;
+            return;
+        }
+    }
+    if (g_fallbackQueueCount < kMaxFallbackQueues) {
+        g_fallbackQueues[g_fallbackQueueCount].queue = queue;
+        g_fallbackQueues[g_fallbackQueueCount].devData = devData;
+        ++g_fallbackQueueCount;
+    }
+}
+
+static void RemoveFallbackQueuesForDeviceLocked(neural_companion::DeviceData* devData) noexcept {
+    if (!devData) return;
+    for (size_t i = 0; i < g_fallbackQueueCount; ) {
+        if (g_fallbackQueues[i].devData == devData) {
+            g_fallbackQueues[i] = g_fallbackQueues[g_fallbackQueueCount - 1];
+            g_fallbackQueues[g_fallbackQueueCount - 1] = FallbackQueueEntry{};
+            --g_fallbackQueueCount;
+        } else {
+            ++i;
+        }
+    }
+}
+
+static neural_companion::DeviceData* ResolveDeviceForQueueLocked(
+    VkQueue queue,
+    const VkPresentInfoKHR* pPresentInfo) noexcept
+{
+    if (queue == VK_NULL_HANDLE) return nullptr;
+
+    // 1. Primary lookup in dynamic queue map
+    auto it = g_queueToDeviceMap.find(queue);
+    if (it != g_queueToDeviceMap.end() && it->second != nullptr) {
+        return it->second;
+    }
+
+    // 2. Fixed-capacity fallback queue table (populated if map allocation failed)
+    for (size_t i = 0; i < g_fallbackQueueCount; ++i) {
+        if (g_fallbackQueues[i].queue == queue && g_fallbackQueues[i].devData != nullptr) {
+            return g_fallbackQueues[i].devData;
+        }
+    }
+
+    // 3. Fallback: Lookup device via swapchain in pPresentInfo
+    if (pPresentInfo && pPresentInfo->swapchainCount > 0 && pPresentInfo->pSwapchains) {
+        for (uint32_t i = 0; i < pPresentInfo->swapchainCount; ++i) {
+            VkSwapchainKHR sc = pPresentInfo->pSwapchains[i];
+            if (sc != VK_NULL_HANDLE) {
+                auto scIt = g_swapchainToDeviceMap.find(sc);
+                if (scIt != g_swapchainToDeviceMap.end() && scIt->second != nullptr) {
+                    return scIt->second;
+                }
+            }
+        }
+    }
+
+    // 4. Fallback: If only a single logical device exists, any valid queue must belong to it
+    if (g_deviceMap.size() == 1) {
+        return g_deviceMap.begin()->second.get();
+    }
+
+    // 5. Fallback: Check if any active device has vkQueuePresentKHR
+    for (const auto& pair : g_deviceMap) {
+        if (pair.second && pair.second->vkQueuePresentKHR) {
+            return pair.second.get();
+        }
+    }
+
+    return nullptr;
+}
 
 neural_companion::LayerStats g_stats;
 
@@ -441,7 +527,7 @@ static VKAPI_ATTR void VKAPI_CALL nc_vkDestroyDevice(
         if (it != g_deviceMap.end()) {
             nextDestroy = it->second->vkDestroyDevice;
 
-            // Remove associated queue mappings
+            // Remove associated queue mappings from dynamic map
             for (auto qIt = g_queueToDeviceMap.begin(); qIt != g_queueToDeviceMap.end(); ) {
                 if (qIt->second == it->second.get()) {
                     qIt = g_queueToDeviceMap.erase(qIt);
@@ -449,6 +535,19 @@ static VKAPI_ATTR void VKAPI_CALL nc_vkDestroyDevice(
                     ++qIt;
                 }
             }
+
+            // Remove associated fallback queue entries
+            RemoveFallbackQueuesForDeviceLocked(it->second.get());
+
+            // Remove associated swapchains
+            for (auto scIt = g_swapchainToDeviceMap.begin(); scIt != g_swapchainToDeviceMap.end(); ) {
+                if (scIt->second == it->second.get()) {
+                    scIt = g_swapchainToDeviceMap.erase(scIt);
+                } else {
+                    ++scIt;
+                }
+            }
+
             g_deviceMap.erase(it);
         }
     }
@@ -477,13 +576,28 @@ static VKAPI_ATTR void VKAPI_CALL nc_vkGetDeviceQueue(
     if (devData && devData->vkGetDeviceQueue) {
         devData->vkGetDeviceQueue(device, queueFamilyIndex, queueIndex, pQueue);
         if (pQueue && *pQueue != VK_NULL_HANDLE) {
+            bool simOOM = false;
+            char simOOMEnv[8] = {0};
+            if (GetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", simOOMEnv, sizeof(simOOMEnv)) > 0 && simOOMEnv[0] == '1') {
+                simOOM = true;
+            }
+
             try {
+                if (simOOM) {
+                    throw std::bad_alloc();
+                }
                 std::lock_guard<std::mutex> lock(g_stateMutex);
                 g_queueToDeviceMap[*pQueue] = devData;
                 LogInfo("nc_vkGetDeviceQueue: mapped queue 0x%p (family %u, index %u) to device 0x%p",
                         reinterpret_cast<void*>(*pQueue), queueFamilyIndex, queueIndex, reinterpret_cast<void*>(device));
+            } catch (const std::exception& e) {
+                LogWarn("nc_vkGetDeviceQueue: optional queue map allocation failed: %s; falling back to non-allocating queue table", e.what());
+                std::lock_guard<std::mutex> lock(g_stateMutex);
+                RecordFallbackQueueLocked(*pQueue, devData);
             } catch (...) {
-                LogError("nc_vkGetDeviceQueue: memory allocation failure while tracking queue");
+                LogWarn("nc_vkGetDeviceQueue: optional queue map allocation failed; falling back to non-allocating queue table");
+                std::lock_guard<std::mutex> lock(g_stateMutex);
+                RecordFallbackQueueLocked(*pQueue, devData);
             }
         }
     }
@@ -506,13 +620,28 @@ static VKAPI_ATTR void VKAPI_CALL nc_vkGetDeviceQueue2(
     if (devData && devData->vkGetDeviceQueue2) {
         devData->vkGetDeviceQueue2(device, pQueueInfo, pQueue);
         if (pQueue && *pQueue != VK_NULL_HANDLE) {
+            bool simOOM = false;
+            char simOOMEnv[8] = {0};
+            if (GetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", simOOMEnv, sizeof(simOOMEnv)) > 0 && simOOMEnv[0] == '1') {
+                simOOM = true;
+            }
+
             try {
+                if (simOOM) {
+                    throw std::bad_alloc();
+                }
                 std::lock_guard<std::mutex> lock(g_stateMutex);
                 g_queueToDeviceMap[*pQueue] = devData;
                 LogInfo("nc_vkGetDeviceQueue2: mapped queue 0x%p to device 0x%p",
                         reinterpret_cast<void*>(*pQueue), reinterpret_cast<void*>(device));
+            } catch (const std::exception& e) {
+                LogWarn("nc_vkGetDeviceQueue2: optional queue map allocation failed: %s; falling back to non-allocating queue table", e.what());
+                std::lock_guard<std::mutex> lock(g_stateMutex);
+                RecordFallbackQueueLocked(*pQueue, devData);
             } catch (...) {
-                LogError("nc_vkGetDeviceQueue2: memory allocation failure while tracking queue");
+                LogWarn("nc_vkGetDeviceQueue2: optional queue map allocation failed; falling back to non-allocating queue table");
+                std::lock_guard<std::mutex> lock(g_stateMutex);
+                RecordFallbackQueueLocked(*pQueue, devData);
             }
         }
     }
@@ -544,7 +673,14 @@ static VKAPI_ATTR VkResult VKAPI_CALL nc_vkCreateSwapchainKHR(
     }
 
     VkResult res = devData->vkCreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
-    if (res == VK_SUCCESS && pSwapchain) {
+    if (res == VK_SUCCESS && pSwapchain && *pSwapchain != VK_NULL_HANDLE) {
+        try {
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            g_swapchainToDeviceMap[*pSwapchain] = devData;
+        } catch (...) {
+            // Optional swapchain bookkeeping failure must not impede pass-through
+        }
+
         uint32_t count = ++g_stats.swapchainCreations;
         bool isRecreation = (pCreateInfo && pCreateInfo->oldSwapchain != VK_NULL_HANDLE);
         LogInfo("nc_vkCreateSwapchainKHR: created swapchain 0x%p (extent: %ux%u, format: %d, %s, total created: %u)",
@@ -563,19 +699,22 @@ static VKAPI_ATTR void VKAPI_CALL nc_vkDestroySwapchainKHR(
     const VkAllocationCallbacks* pAllocator) noexcept
 {
     neural_companion::DeviceData* devData = nullptr;
+    PFN_vkDestroySwapchainKHR nextDestroy = nullptr;
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         auto it = g_deviceMap.find(device);
         if (it != g_deviceMap.end()) {
             devData = it->second.get();
+            nextDestroy = devData->vkDestroySwapchainKHR;
         }
+        g_swapchainToDeviceMap.erase(swapchain);
     }
 
-    if (devData && devData->vkDestroySwapchainKHR) {
+    if (nextDestroy) {
         uint32_t count = ++g_stats.swapchainDestructions;
         LogInfo("nc_vkDestroySwapchainKHR: destroying swapchain 0x%p (total destroyed: %u)",
                 reinterpret_cast<void*>(swapchain), count);
-        devData->vkDestroySwapchainKHR(device, swapchain, pAllocator);
+        nextDestroy(device, swapchain, pAllocator);
     }
 }
 
@@ -648,18 +787,29 @@ static VKAPI_ATTR VkResult VKAPI_CALL nc_vkQueuePresentKHR(
     const VkPresentInfoKHR* pPresentInfo) noexcept
 {
     neural_companion::DeviceData* devData = nullptr;
+    bool wasFallback = false;
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         auto it = g_queueToDeviceMap.find(queue);
-        if (it != g_queueToDeviceMap.end()) {
+        if (it != g_queueToDeviceMap.end() && it->second != nullptr) {
             devData = it->second;
+        } else {
+            devData = ResolveDeviceForQueueLocked(queue, pPresentInfo);
+            if (devData) {
+                wasFallback = true;
+            }
         }
     }
 
     if (!devData || !devData->vkQueuePresentKHR) {
-        LogError("nc_vkQueuePresentKHR: untracked queue 0x%p or missing downstream pointer",
+        LogError("nc_vkQueuePresentKHR: untracked queue 0x%p and could not resolve device fallback or downstream pointer",
                  reinterpret_cast<void*>(queue));
         return VK_ERROR_INITIALIZATION_FAILED;
+    }
+
+    if (wasFallback) {
+        LogWarn("nc_vkQueuePresentKHR: queue 0x%p was not in primary map; successfully recovered device 0x%p via pass-through fallback",
+                reinterpret_cast<void*>(queue), reinterpret_cast<void*>(devData->device));
     }
 
     // Pass-through: unmodified forwarding of pPresentInfo downstream

@@ -77,13 +77,15 @@ Before using another repository to guide implementation, inspect its licence and
 
 The repository includes an automated validation script (`scripts/run_sample_validation.ps1`) that executes:
 1. Pre-flight layer discovery and manifest validation.
-2. Focused unit tests verifying layer dispatch, query semantics, extension-disabled null returns, and unhandled forwarding (`test_layer_dispatch.exe`).
-3. Co-activated sample host execution with `VK_LAYER_KHRONOS_validation` on `vkcube.exe`, verifying:
-   - Simultaneous loader discovery and activation of both explicit layers.
+2. Parser unit and negative acceptance tests (`tests/test_harness_parsers.ps1`) verifying loader insertion checks, diagnostic parsing of warnings without VUIDs, integer exit code enforcement, and baseline leakage detection.
+3. Focused unit tests verifying layer dispatch, query semantics, extension-disabled null returns, unhandled forwarding, and simulated queue bookkeeping allocation failure fallback (`test_layer_dispatch.exe`).
+4. Co-activated sample host execution with `VK_LAYER_KHRONOS_validation` on `vkcube.exe`, verifying:
+   - Simultaneous loader discovery and insertion of both explicit layers.
    - Zero validation errors or warnings emitted.
    - Dynamic window resizing, swapchain recreation, and balanced swapchain lifecycle (`created == destroyed`).
    - Exact requested presentation call counts forwarded downstream.
-4. Baseline run verifying clean deactivation and host operation with Neural-Companion disabled.
+5. Live host queue bookkeeping OOM regression test (`vkcube.exe` with `NC_TEST_SIMULATE_QUEUE_OOM=1`), verifying uninterrupted pass-through presentation via non-allocating fallback table.
+6. Baseline run verifying clean deactivation and host operation with Neural-Companion disabled.
 
 To run the full validation suite:
 ```powershell

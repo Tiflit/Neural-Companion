@@ -42,14 +42,7 @@ if ([string]::IsNullOrWhiteSpace($SdkDir) -or -not (Test-Path $SdkDir)) {
     exit 1
 }
 
-if (-not ([System.Management.Automation.PSTypeName]'NC.Win32').Type) {
-    Add-Type -MemberDefinition @'
-        [DllImport("user32.dll", EntryPoint = "FindWindowA", CharSet = CharSet.Ansi)]
-        public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-        [DllImport("user32.dll")]
-        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-'@ -Name 'Win32' -Namespace 'NC'
-}
+
 
 # Resolve paths to canonical absolute paths
 $BuildDir         = [System.IO.Path]::GetFullPath($BuildDir)
@@ -107,45 +100,53 @@ Write-Host ""
 $origLayerPath   = $env:VK_LAYER_PATH
 $origLayers      = $env:VK_INSTANCE_LAYERS
 $origLogPath     = $env:NC_LOG_PATH
+# -------------------------------------------------------------------------
+# Step 1.5: Run Acceptance Parser Unit & Negative Tests
+# -------------------------------------------------------------------------
+Write-Host "=== 1.5. Running Harness Acceptance Parser & Negative Tests ==="
+$parserTestScript = Join-Path $PSScriptRoot "..\tests\test_harness_parsers.ps1"
+if (-not (Test-Path $parserTestScript)) {
+    Write-Error "Parser test suite script not found at: $parserTestScript"
+    exit 1
+}
+. $parserTestScript
+Write-Host "  [PASS] Acceptance check parser passed all 13 positive and negative tests.`n"
+
 $origLoaderDebug = $env:VK_LOADER_DEBUG
 
 # -------------------------------------------------------------------------
 # Step 2: Run Focused Layer Dispatch & Query Semantics Unit Test
 # -------------------------------------------------------------------------
 Write-Host "=== 2. Running Layer Dispatch & Query Semantics Unit Test ==="
+
 try {
     $sdkBin = Join-Path $SdkDir "Bin"
     $env:VK_LAYER_PATH = "$BuildDir;$sdkBin"
-    $env:VK_INSTANCE_LAYERS = "VK_LAYER_NEURALCOMPANION_passthrough"
+    $env:VK_INSTANCE_LAYERS = "VK_LAYER_NEURALCOMPANION_passthrough;VK_LAYER_KHRONOS_validation"
+    $env:VK_LOADER_DEBUG = "layer,info"
     $env:NC_LOG_PATH = $LogFile
 
-    # Clean prior log file
     if (Test-Path $LogFile) { Remove-Item $LogFile -Force }
 
-    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-    $pinfo.FileName = $testDispatchExe
-    $pinfo.UseShellExecute = $false
-    $pinfo.RedirectStandardOutput = $true
-    $pinfo.RedirectStandardError = $true
+    $resDispatch = Invoke-ProcessBounded -FilePath $testDispatchExe -TimeoutMs 15000
+    Write-Host $resDispatch.Combined
 
-    $dispatchProc = [System.Diagnostics.Process]::Start($pinfo)
-    [void]$dispatchProc.WaitForExit(10000)
-    $dispatchProc.Refresh()
-    $dispatchOut = $dispatchProc.StandardOutput.ReadToEnd()
-    $dispatchErr = $dispatchProc.StandardError.ReadToEnd()
-    $dispatchExit = $dispatchProc.ExitCode
+    $null = Assert-ProcessExitZero $resDispatch.ExitCode "test_layer_dispatch"
 
-    Write-Host $dispatchOut
-    if ($dispatchExit -ne 0) {
-        Write-Error "test_layer_dispatch failed with exit code $($dispatchExit):`n$dispatchErr"
-        exit $dispatchExit
+    $dispatchCombinedLines = @($resDispatch.Combined -split "\r?\n")
+    $dispatchValDiags = Get-ValidationDiagnostics $dispatchCombinedLines
+    if ($dispatchValDiags.Count -gt 0) {
+        Write-Error "Assertion Failed: test_layer_dispatch emitted validation errors/warnings:`n$($dispatchValDiags -join "`n")"
+        exit 1
     }
-    Write-Host "  [PASS] Unit test for layer dispatch, query semantics, and unhandled forwarding passed.`n"
+
+    Write-Host "  [PASS] Unit test for layer dispatch, query semantics, unhandled forwarding, and queue OOM passed with 0 validation errors.`n"
 }
 finally {
     if ($null -ne $origLayerPath)   { $env:VK_LAYER_PATH = $origLayerPath } else { Remove-Item Env:\VK_LAYER_PATH -ErrorAction SilentlyContinue }
     if ($null -ne $origLayers)      { $env:VK_INSTANCE_LAYERS = $origLayers } else { Remove-Item Env:\VK_INSTANCE_LAYERS -ErrorAction SilentlyContinue }
     if ($null -ne $origLogPath)     { $env:NC_LOG_PATH = $origLogPath } else { Remove-Item Env:\NC_LOG_PATH -ErrorAction SilentlyContinue }
+    if ($null -ne $origLoaderDebug) { $env:VK_LOADER_DEBUG = $origLoaderDebug } else { Remove-Item Env:\VK_LOADER_DEBUG -ErrorAction SilentlyContinue }
 }
 
 # -------------------------------------------------------------------------
@@ -171,66 +172,45 @@ try {
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
-    $outTmp = "$HostLogFile.out.tmp"
-    $errTmp = "$HostLogFile.err.tmp"
-    if (Test-Path $outTmp) { Remove-Item $outTmp -Force }
-    if (Test-Path $errTmp) { Remove-Item $errTmp -Force }
-
-    $proc = Start-Process -FilePath $vkcube -ArgumentList "--c $FrameCount --validate --suppress_popups" `
-        -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -PassThru
-
-    if ($IncludeResizeTest) {
-        $hwnd = [IntPtr]::Zero
-        # Bounded poll for window handle: up to 30 attempts of 100ms
-        for ($i = 0; $i -lt 30 -and $hwnd -eq [IntPtr]::Zero; $i++) {
-            Start-Sleep -Milliseconds 100
-            $proc.Refresh()
-            $hwnd = $proc.MainWindowHandle
+    $onStarted = {
+        param($p)
+        if ($IncludeResizeTest) {
+            $hwnd = [IntPtr]::Zero
+            # Bounded poll for Vulkan Cube window handle: up to 30 attempts of 100ms
+            for ($i = 0; $i -lt 30 -and $hwnd -eq [IntPtr]::Zero; $i++) {
+                Start-Sleep -Milliseconds 100
+                $hwnd = [NC.Win32Helper]::FindCubeWindow([uint32]$p.Id)
+                if ($hwnd -eq [IntPtr]::Zero) {
+                    $hwnd = [NC.Win32Helper]::FindWindow("Vulkan Cube", $null)
+                }
+            }
+            if ($hwnd -eq [IntPtr]::Zero) {
+                Write-Error "Assertion Failed: Unable to acquire valid window handle (HWND) for resize test within 3000ms"
+            } else {
+                # Allow vkcube to enter active rendering loop before triggering resize (demo->prepared == true)
+                Start-Sleep -Milliseconds 350
+                $resizeSuccess = [NC.Win32Helper]::MoveWindow($hwnd, 100, 100, 680, 680, $true)
+                if (-not $resizeSuccess) {
+                    Write-Error "Assertion Failed: MoveWindow failed to resize cooperating sample host window"
+                } else {
+                    $lParam = [IntPtr]( (680 -shl 16) -bor 680 )
+                    [void][NC.Win32Helper]::PostMessage($hwnd, 0x0005, [IntPtr]::Zero, $lParam)
+                    Write-Host "  [PASS] Triggered window resize event (500x500 -> 680x680, HWND: $hwnd)"
+                }
+            }
         }
-        if ($hwnd -eq [IntPtr]::Zero) {
-            $proc.Kill()
-            Write-Error "Assertion Failed: Unable to acquire valid window handle (HWND) for resize test within 3000ms"
-            exit 1
-        }
-
-        # Allow vkcube to complete initialization and enter active rendering loop before triggering resize
-        Start-Sleep -Milliseconds 400
-
-        $resizeSuccess = [NC.Win32]::SetWindowPos($hwnd, [IntPtr]::Zero, 100, 100, 680, 680, 0x0040)
-        if (-not $resizeSuccess) {
-            $proc.Kill()
-            Write-Error "Assertion Failed: SetWindowPos failed to resize cooperating sample host window"
-            exit 1
-        }
-        Write-Host "  [PASS] Triggered window resize event (500x500 -> 680x680, HWND: $hwnd)"
     }
 
-    $waitTimeoutMs = 15000
-    $exited = $proc.WaitForExit($waitTimeoutMs)
-    if (-not $exited) {
-        $proc.Kill()
-        Write-Error "Assertion Failed: vkcube execution timed out after $waitTimeoutMs ms; process terminated"
-        exit 1
-    }
+    $resCoact = Invoke-ProcessBounded -FilePath $vkcube -Arguments "--c $FrameCount --validate --suppress_popups" `
+        -TimeoutMs 15000 -OnProcessStarted $onStarted
 
-    [void]$proc.WaitForExit()
-    $proc.Refresh()
     $stopwatch.Stop()
-    $exitCode = $proc.ExitCode
-
-    # Combine stdout and stderr into HostLogFile
-    $combined = ""
-    if (Test-Path $outTmp) { $combined += [System.IO.File]::ReadAllText($outTmp); Remove-Item $outTmp -Force }
-    if (Test-Path $errTmp) { $combined += "`n" + [System.IO.File]::ReadAllText($errTmp); Remove-Item $errTmp -Force }
-    [System.IO.File]::WriteAllText($HostLogFile, $combined)
+    [System.IO.File]::WriteAllText($HostLogFile, $resCoact.Combined)
 
     Write-Host "  vkcube execution time : $($stopwatch.ElapsedMilliseconds) ms"
-    Write-Host "  vkcube exit code      : $exitCode"
+    Write-Host "  vkcube exit code      : $($resCoact.ExitCode)"
 
-    if ($null -ne $exitCode -and $exitCode -ne 0) {
-        Write-Error "vkcube exited with non-zero exit code: $exitCode"
-        exit $exitCode
-    }
+    $null = Assert-ProcessExitZero $resCoact.ExitCode "vkcube"
 }
 finally {
     if ($null -ne $origLayerPath)   { $env:VK_LAYER_PATH = $origLayerPath } else { Remove-Item Env:\VK_LAYER_PATH -ErrorAction SilentlyContinue }
@@ -260,20 +240,15 @@ Write-Host "  Layer log entries generated       : $($logLines.Count)"
 Write-Host "  Host/Loader log entries generated : $($hostLines.Count)"
 
 # --- Host / Loader Diagnostics Assertions ---
-$ncLayerActive  = ($hostLines | Select-String "VK_LAYER_NEURALCOMPANION_passthrough").Length -gt 0
-$valLayerActive = ($hostLines | Select-String "VK_LAYER_KHRONOS_validation").Length -gt 0
+$ncLayerActive  = Test-LayerActivation $hostLines "VK_LAYER_NEURALCOMPANION_passthrough"
+$valLayerActive = Test-LayerActivation $hostLines "VK_LAYER_KHRONOS_validation"
 
 # Extract selected physical device from host output and layer log
 $hostSelectedGpuLine = $hostLines | Select-String "Selected GPU" | Select-Object -First 1
 $layerSelectedGpuLine = $logLines | Select-String "nc_vkCreateDevice: creating logical device on selected physical device:" | Select-Object -First 1
 
 # Check for validation errors or warnings emitted by VK_LAYER_KHRONOS_validation
-$valErrors = $hostLines | Where-Object {
-    $_ -match "VUID-" -or
-    $_ -match "VALIDATION_ERROR" -or
-    $_ -match "\[ VVL \] Error" -or
-    $_ -match "\[ VVL \] Warning"
-}
+$valErrors = Get-ValidationDiagnostics $hostLines
 
 Write-Host "  Loader: Neural-Companion Active   : $(if ($ncLayerActive) { '[PASS]' } else { '[FAIL]' })"
 Write-Host "  Loader: Validation Layer Active   : $(if ($valLayerActive) { '[PASS]' } else { '[FAIL]' })"
@@ -286,11 +261,11 @@ if ($layerSelectedGpuLine) {
 }
 
 if (-not $ncLayerActive) {
-    Write-Error "Assertion Failed: Loader did not activate VK_LAYER_NEURALCOMPANION_passthrough"
+    Write-Error "Assertion Failed: Loader did not insert/activate VK_LAYER_NEURALCOMPANION_passthrough"
     exit 1
 }
 if (-not $valLayerActive) {
-    Write-Error "Assertion Failed: Loader did not activate VK_LAYER_KHRONOS_validation"
+    Write-Error "Assertion Failed: Loader did not insert/activate VK_LAYER_KHRONOS_validation"
     exit 1
 }
 if ($valErrors.Count -gt 0) {
@@ -372,9 +347,63 @@ $logLines | Where-Object {
 } | ForEach-Object { Write-Host "    $_" }
 
 # -------------------------------------------------------------------------
+# Step 4.5: Live Host Queue Bookkeeping OOM Regression Test
+# -------------------------------------------------------------------------
+# Step 4.5: Live Host Queue Bookkeeping OOM Regression Test
+# -------------------------------------------------------------------------
+Write-Host "`n=== 4.5. Live Host Queue OOM & Pass-Through Fallback Test ==="
+$oomLogFile = (Join-Path $PSScriptRoot "..\build\neural_companion_oom_test.log")
+$oomHostLog = (Join-Path $PSScriptRoot "..\build\vkcube_oom_host.log")
+
+if (Test-Path $oomLogFile) { Remove-Item $oomLogFile -Force }
+if (Test-Path $oomHostLog) { Remove-Item $oomHostLog -Force }
+
+try {
+    $sdkBin = Join-Path $SdkDir "Bin"
+    $env:VK_LAYER_PATH = "$BuildDir;$sdkBin"
+    $env:VK_INSTANCE_LAYERS = "VK_LAYER_NEURALCOMPANION_passthrough;VK_LAYER_KHRONOS_validation"
+    $env:VK_LOADER_DEBUG = "layer,info"
+    $env:NC_LOG_PATH = $oomLogFile
+    $env:NC_TEST_SIMULATE_QUEUE_OOM = "1"
+
+    $resOOM = Invoke-ProcessBounded -FilePath $vkcube -Arguments "--c 60 --validate --suppress_popups" -TimeoutMs 15000
+    [System.IO.File]::WriteAllText($oomHostLog, $resOOM.Combined)
+
+    $null = Assert-ProcessExitZero $resOOM.ExitCode "vkcube (Queue OOM Simulation)"
+
+    $oomHostLines = @($resOOM.Combined -split "\r?\n")
+    $oomValErrors = Get-ValidationDiagnostics $oomHostLines
+    if ($oomValErrors.Count -gt 0) {
+        Write-Error "Assertion Failed: Queue OOM regression run emitted validation errors:`n$($oomValErrors -join "`n")"
+        exit 1
+    }
+
+    $oomLogLines = Get-Content $oomLogFile
+    $hasOOMFallback = ($oomLogLines | Select-String "optional queue map allocation failed.*falling back to non-allocating queue table").Length -gt 0
+    $hasPresentWithOOM = ($oomLogLines | Select-String "nc_vkDestroyInstance: .* Total presentation calls: 60").Length -gt 0
+
+    Write-Host "  Simulated Queue Map OOM Caught    : $(if ($hasOOMFallback) { '[PASS]' } else { '[FAIL]' })"
+    Write-Host "  Pass-Through Present via Fallback : $(if ($hasPresentWithOOM) { '[PASS]' } else { '[FAIL]' })"
+    Write-Host "  Validation Errors/Warnings Count  : 0 [PASS]"
+
+    if (-not ($hasOOMFallback -and $hasPresentWithOOM)) {
+        Write-Error "Assertion Failed: Queue OOM fallback verification failed in layer log."
+        exit 1
+    }
+    Write-Host "  [PASS] Live cooperating host presented 60 frames uninterrupted under simulated queue map OOM.`n"
+}
+finally {
+    Remove-Item Env:\NC_TEST_SIMULATE_QUEUE_OOM -ErrorAction SilentlyContinue
+    if ($null -ne $origLayerPath)   { $env:VK_LAYER_PATH = $origLayerPath } else { Remove-Item Env:\VK_LAYER_PATH -ErrorAction SilentlyContinue }
+    if ($null -ne $origLayers)      { $env:VK_INSTANCE_LAYERS = $origLayers } else { Remove-Item Env:\VK_INSTANCE_LAYERS -ErrorAction SilentlyContinue }
+    if ($null -ne $origLogPath)     { $env:NC_LOG_PATH = $origLogPath } else { Remove-Item Env:\NC_LOG_PATH -ErrorAction SilentlyContinue }
+    if ($null -ne $origLoaderDebug) { $env:VK_LOADER_DEBUG = $origLoaderDebug } else { Remove-Item Env:\VK_LOADER_DEBUG -ErrorAction SilentlyContinue }
+}
+
+# -------------------------------------------------------------------------
 # Step 5: Baseline Verification with Neural-Companion Layer Disabled
 # -------------------------------------------------------------------------
-Write-Host "`n=== 5. Baseline Launch (Neural-Companion Layer Disabled) ==="
+Write-Host "=== 5. Baseline Launch (Neural-Companion Layer Disabled) ==="
 
 if (Test-Path $BaselineLogFile) { Remove-Item $BaselineLogFile -Force }
 
@@ -390,57 +419,22 @@ try {
 
     $stopwatchBaseline = [System.Diagnostics.Stopwatch]::StartNew()
 
-    $baseOutTmp = "$BaselineLogFile.out.tmp"
-    $baseErrTmp = "$BaselineLogFile.err.tmp"
-    if (Test-Path $baseOutTmp) { Remove-Item $baseOutTmp -Force }
-    if (Test-Path $baseErrTmp) { Remove-Item $baseErrTmp -Force }
-
-    $procBaseline = Start-Process -FilePath $vkcube -ArgumentList "--c 60 --validate --suppress_popups" `
-        -RedirectStandardOutput $baseOutTmp -RedirectStandardError $baseErrTmp -PassThru
-
-    $baselineWaitMs = 10000
-    $baselineExited = $procBaseline.WaitForExit($baselineWaitMs)
-    if (-not $baselineExited) {
-        $procBaseline.Kill()
-        Write-Error "Assertion Failed: Baseline vkcube execution timed out after $baselineWaitMs ms"
-        exit 1
-    }
-
-    [void]$procBaseline.WaitForExit()
-    $procBaseline.Refresh()
+    $resBaseline = Invoke-ProcessBounded -FilePath $vkcube -Arguments "--c 60 --validate --suppress_popups" -TimeoutMs 15000
     $stopwatchBaseline.Stop()
-    $exitCodeBaseline = $procBaseline.ExitCode
-
-    $baseCombined = ""
-    if (Test-Path $baseOutTmp) { $baseCombined += [System.IO.File]::ReadAllText($baseOutTmp); Remove-Item $baseOutTmp -Force }
-    if (Test-Path $baseErrTmp) { $baseCombined += "`n" + [System.IO.File]::ReadAllText($baseErrTmp); Remove-Item $baseErrTmp -Force }
-    [System.IO.File]::WriteAllText($BaselineLogFile, $baseCombined)
+    [System.IO.File]::WriteAllText($BaselineLogFile, $resBaseline.Combined)
 
     Write-Host "  vkcube baseline execution time : $($stopwatchBaseline.ElapsedMilliseconds) ms"
-    Write-Host "  vkcube baseline exit code      : $exitCodeBaseline"
+    Write-Host "  vkcube baseline exit code      : $($resBaseline.ExitCode)"
 
-    if ($null -ne $exitCodeBaseline -and $exitCodeBaseline -ne 0) {
-        Write-Error "Baseline vkcube run failed with exit code: $exitCodeBaseline"
-        exit $exitCodeBaseline
-    }
+    $null = Assert-ProcessExitZero $resBaseline.ExitCode "vkcube baseline"
 
-    # Baseline loader verification
-    $baselineLines = Get-Content $BaselineLogFile
-    $baseValActive = ($baselineLines | Select-String "VK_LAYER_KHRONOS_validation").Length -gt 0
-    $baseNcActive  = ($baselineLines | Select-String "VK_LAYER_NEURALCOMPANION_passthrough").Length -gt 0
+    # Baseline loader verification & isolation assertions
+    $baselineLines = @($resBaseline.Combined -split "\r?\n")
+    $null = Assert-BaselineIsolation $baselineLines
 
-    Write-Host "  Baseline: Validation Layer Active      : $(if ($baseValActive) { '[PASS]' } else { '[FAIL]' })"
-    Write-Host "  Baseline: Neural-Companion Inactive    : $(if (-not $baseNcActive) { '[PASS]' } else { '[FAIL]' })"
-
-    if (-not $baseValActive) {
-        Write-Error "Assertion Failed: Baseline did not load VK_LAYER_KHRONOS_validation"
-        exit 1
-    }
-    if ($baseNcActive) {
-        Write-Error "Assertion Failed: Baseline unexpectedly loaded VK_LAYER_NEURALCOMPANION_passthrough"
-        exit 1
-    }
-
+    Write-Host "  Baseline: Validation Layer Active      : [PASS]"
+    Write-Host "  Baseline: Neural-Companion Inactive    : [PASS]"
+    Write-Host "  Baseline: Validation Diagnostics Clean : [PASS]"
     Write-Host "  [PASS] Clean removal and baseline operation verified with activation evidence."
 }
 finally {

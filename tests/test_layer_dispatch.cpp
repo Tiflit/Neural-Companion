@@ -25,6 +25,23 @@ int main() {
     std::cout << "=================================================================\n";
 
     // 1. Initialize Vulkan Instance
+    uint32_t instExtCount = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &instExtCount, nullptr);
+    std::vector<VkExtensionProperties> instExts(instExtCount);
+    vkEnumerateInstanceExtensionProperties(nullptr, &instExtCount, instExts.data());
+
+    std::vector<const char*> enabledInstExts;
+    for (const auto& ext : instExts) {
+        if (strcmp(ext.extensionName, VK_KHR_SURFACE_EXTENSION_NAME) == 0) {
+            enabledInstExts.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+        }
+#if defined(_WIN32)
+        if (strcmp(ext.extensionName, "VK_KHR_win32_surface") == 0) {
+            enabledInstExts.push_back("VK_KHR_win32_surface");
+        }
+#endif
+    }
+
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pApplicationName = "LayerDispatchTest";
@@ -36,11 +53,13 @@ int main() {
     VkInstanceCreateInfo instanceInfo{};
     instanceInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instanceInfo.pApplicationInfo = &appInfo;
+    instanceInfo.enabledExtensionCount = static_cast<uint32_t>(enabledInstExts.size());
+    instanceInfo.ppEnabledExtensionNames = enabledInstExts.data();
 
     VkInstance instance = VK_NULL_HANDLE;
     VkResult res = vkCreateInstance(&instanceInfo, nullptr, &instance);
     TEST_ASSERT(res == VK_SUCCESS && instance != VK_NULL_HANDLE, "vkCreateInstance failed");
-    std::cout << "  [PASS] Vulkan instance created successfully (0x" << instance << ")\n";
+    std::cout << "  [PASS] Vulkan instance created successfully (0x" << instance << ", surface ext enabled)\n";
 
     // 2. Resolve Layer Direct Module Handles
     HMODULE hLayer = GetModuleHandleA("VkLayer_neural_companion_passthrough.dll");
@@ -189,6 +208,41 @@ int main() {
         pfnQueuePresent = layerGDPA(deviceWithExt, "vkQueuePresentKHR");
         TEST_ASSERT(pfnQueuePresent != nullptr, "layerGDPA must return valid pointer when extension is enabled");
         std::cout << "  [PASS] layerGDPA('vkQueuePresentKHR') returned valid wrapper\n";
+
+        // -------------------------------------------------------------------------
+        // TEST 3: Queue Bookkeeping OOM & Pass-Through Fallback Regression
+        // -------------------------------------------------------------------------
+        std::cout << "\n--- Test 3: Queue Bookkeeping Allocation Failure Regression ---\n";
+        PFN_vkGetDeviceQueue pfnLayerGetDeviceQueue = reinterpret_cast<PFN_vkGetDeviceQueue>(
+            layerGDPA(deviceWithExt, "vkGetDeviceQueue"));
+        TEST_ASSERT(pfnLayerGetDeviceQueue != nullptr, "layerGDPA must return valid vkGetDeviceQueue");
+
+        // Simulate queue map allocation failure via test environment variable
+        SetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", "1");
+
+        VkQueue queueWithOOM = VK_NULL_HANDLE;
+        pfnLayerGetDeviceQueue(deviceWithExt, queueFamilyIndex, 0, &queueWithOOM);
+        TEST_ASSERT(queueWithOOM != VK_NULL_HANDLE, "vkGetDeviceQueue must return valid queue handle even under map OOM");
+        std::cout << "  [PASS] vkGetDeviceQueue returned valid handle under simulated OOM (queue: 0x" << queueWithOOM << ")\n";
+
+        // Reset simulation flag
+        SetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", "");
+
+        // Also test vkGetDeviceQueue2 if available
+        PFN_vkGetDeviceQueue2 pfnLayerGetDeviceQueue2 = reinterpret_cast<PFN_vkGetDeviceQueue2>(
+            layerGDPA(deviceWithExt, "vkGetDeviceQueue2"));
+        if (pfnLayerGetDeviceQueue2) {
+            SetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", "1");
+            VkDeviceQueueInfo2 qInfo2{};
+            qInfo2.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2;
+            qInfo2.queueFamilyIndex = queueFamilyIndex;
+            qInfo2.queueIndex = 0;
+            VkQueue q2 = VK_NULL_HANDLE;
+            pfnLayerGetDeviceQueue2(deviceWithExt, &qInfo2, &q2);
+            TEST_ASSERT(q2 != VK_NULL_HANDLE, "vkGetDeviceQueue2 must return valid queue handle under map OOM");
+            SetEnvironmentVariableA("NC_TEST_SIMULATE_QUEUE_OOM", "");
+            std::cout << "  [PASS] vkGetDeviceQueue2 returned valid handle under simulated OOM (queue: 0x" << q2 << ")\n";
+        }
 
         vkDestroyDevice(deviceWithExt, nullptr);
         std::cout << "  [PASS] Device with extensions destroyed cleanly\n";
