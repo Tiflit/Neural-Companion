@@ -177,6 +177,20 @@ if (-not ([System.Management.Automation.PSTypeName]'NC.Win32Helper').Type) {
             }, IntPtr.Zero);
             return foundHwnd;
         }
+
+        public static IntPtr FindTopWindow(uint processId) {
+            IntPtr foundHwnd = IntPtr.Zero;
+            EnumWindows((hWnd, lParam) => {
+                uint pid = 0;
+                GetWindowThreadProcessId(hWnd, out pid);
+                if (pid == processId) {
+                    foundHwnd = hWnd;
+                    return false;
+                }
+                return true;
+            }, IntPtr.Zero);
+            return foundHwnd;
+        }
 '@ -Name 'Win32Helper' -Namespace 'NC'
 }
 
@@ -477,6 +491,91 @@ Run-ParserTest "Positive: AsyncResizeWindow returns immediately without blocking
 Run-ParserTest "Positive: IsHungAppWindow evaluates window responsiveness without error" {
     $res = [NC.Win32Helper]::IsHungAppWindow([IntPtr]::Zero)
     if ($res -ne $false) { throw "Expected false for IntPtr.Zero handle" }
+}
+
+Run-ParserTest "Positive: Real unresponsive child window achieves bounded resize, timeout enforcement, and cleanup" {
+    $tmpChildFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "nc_test_unresponsive_$([System.Guid]::NewGuid().ToString('N')).ps1")
+    $childScript = @"
+Add-Type -AssemblyName System.Windows.Forms
+`$form = New-Object System.Windows.Forms.Form
+`$form.Text = "UnresponsiveTestWindow"
+`$form.Width = 300
+`$form.Height = 300
+`$form.Show()
+# Explicitly access Handle to guarantee immediate synchronous Win32 window creation
+`$h = `$form.Handle
+# Intentionally stop processing messages / freeze window message loop
+Start-Sleep -Seconds 30
+"@
+    [System.IO.File]::WriteAllText($tmpChildFile, $childScript)
+
+    $state = @{
+        CapturedHwnd       = [IntPtr]::Zero
+        AsyncResizeTimeMs  = -1
+        AsyncResizeSuccess = $false
+        ChildPid           = $null
+    }
+
+    $onStarted = {
+        param($p)
+        $state.ChildPid = $p.Id
+        # Wait up to 3000ms for real child window to be created and displayed
+        for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Milliseconds 100
+            $hwnd = [NC.Win32Helper]::FindTopWindow([uint32]$p.Id)
+            if ($hwnd -ne [IntPtr]::Zero) {
+                $state.CapturedHwnd = $hwnd
+                break
+            }
+        }
+
+        if ($state.CapturedHwnd -ne [IntPtr]::Zero) {
+            # Window thread is now sleeping (unresponsive to message loop)
+            # Verify SetWindowPos with SWP_ASYNCWINDOWPOS returns immediately without blocking
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $state.AsyncResizeSuccess = [NC.Win32Helper]::AsyncResizeWindow($state.CapturedHwnd, 100, 100, 450, 450)
+            $sw.Stop()
+            $state.AsyncResizeTimeMs = $sw.ElapsedMilliseconds
+        }
+    }
+
+    $caughtTimeout = $false
+    try {
+        Invoke-ProcessBounded -FilePath "powershell.exe" `
+            -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$tmpChildFile`"" `
+            -TimeoutMs 2000 `
+            -OnProcessStarted $onStarted
+    } catch {
+        if ($_ -match "timed out after 2000 ms and was terminated") {
+            $caughtTimeout = $true
+        } else {
+            throw "Unexpected exception: $_"
+        }
+    } finally {
+        Remove-Item $tmpChildFile -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($state.CapturedHwnd -eq [IntPtr]::Zero) {
+        throw "Failed to discover real child window HWND"
+    }
+    if (-not $state.AsyncResizeSuccess) {
+        throw "AsyncResizeWindow failed on real unresponsive window handle"
+    }
+    if ($state.AsyncResizeTimeMs -gt 500) {
+        throw "AsyncResizeWindow blocked across threads for $($state.AsyncResizeTimeMs)ms (expected bounded < 500ms)"
+    }
+    if (-not $caughtTimeout) {
+        throw "Expected timeout exception for unresponsive child, but process did not time out"
+    }
+
+    # Verify child process cleanup
+    if ($null -ne $state.ChildPid) {
+        $procAfter = Get-Process -Id $state.ChildPid -ErrorAction SilentlyContinue
+        if ($null -ne $procAfter -and -not $procAfter.HasExited) {
+            try { $procAfter.Kill() } catch {}
+            throw "Child process $($state.ChildPid) was not cleaned up after timeout"
+        }
+    }
 }
 
 Write-Host "================================================================="

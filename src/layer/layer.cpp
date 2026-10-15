@@ -771,15 +771,27 @@ static VKAPI_ATTR VkResult VKAPI_CALL nc_vkCreateSwapchainKHR(
 
     VkResult res = devData->vkCreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
     if (res == VK_SUCCESS && pSwapchain && *pSwapchain != VK_NULL_HANDLE) {
+        bool simSwapchainOOM = false;
+        char simScEnv[8] = {0};
+        if (GetEnvironmentVariableA("NC_TEST_SIMULATE_SWAPCHAIN_OOM", simScEnv, sizeof(simScEnv)) > 0 && simScEnv[0] == '1') {
+            simSwapchainOOM = true;
+        }
+
         bool tracked = false;
         {
             std::lock_guard<std::mutex> lock(g_stateMutex);
             try {
+                if (simSwapchainOOM) {
+                    throw std::bad_alloc();
+                }
                 g_swapchainToDeviceMap[*pSwapchain] = devData;
                 tracked = true;
             } catch (...) {}
 
             try {
+                if (simSwapchainOOM) {
+                    throw std::bad_alloc();
+                }
                 devData->ownedSwapchains.push_back(*pSwapchain);
                 tracked = true;
             } catch (...) {}
@@ -1312,8 +1324,34 @@ VKAPI_ATTR void VKAPI_CALL ncTestResetFallbackState() {
     }
 }
 
+VKAPI_ATTR bool VKAPI_CALL ncTestIsSwapchainTracked(VkSwapchainKHR swapchain) {
+    if (swapchain == VK_NULL_HANDLE) return false;
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    if (g_swapchainToDeviceMap.find(swapchain) != g_swapchainToDeviceMap.end()) {
+        return true;
+    }
+    for (size_t i = 0; i < g_fallbackSwapchainCount; ++i) {
+        if (g_fallbackSwapchains[i].swapchain == swapchain) {
+            return true;
+        }
+    }
+    for (const auto& devPair : g_deviceMap) {
+        if (!devPair.second) continue;
+        for (VkSwapchainKHR sc : devPair.second->ownedSwapchains) {
+            if (sc == swapchain) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 VKAPI_ATTR PFN_vkQueuePresentKHR VKAPI_CALL ncTestGetPresentWrapper() {
     return nc_vkQueuePresentKHR;
+}
+
+VKAPI_ATTR PFN_vkCreateSwapchainKHR VKAPI_CALL ncTestGetCreateSwapchainWrapper() {
+    return nc_vkCreateSwapchainKHR;
 }
 
 } // extern "C"

@@ -69,7 +69,9 @@ VKAPI_ATTR bool VKAPI_CALL ncTestRegisterDeviceOwnedSwapchain(VkDevice device, V
 VKAPI_ATTR size_t VKAPI_CALL ncTestGetFallbackQueueCount();
 VKAPI_ATTR size_t VKAPI_CALL ncTestGetFallbackSwapchainCount();
 VKAPI_ATTR void VKAPI_CALL ncTestResetFallbackState();
+VKAPI_ATTR bool VKAPI_CALL ncTestIsSwapchainTracked(VkSwapchainKHR swapchain);
 VKAPI_ATTR PFN_vkQueuePresentKHR VKAPI_CALL ncTestGetPresentWrapper();
+VKAPI_ATTR PFN_vkCreateSwapchainKHR VKAPI_CALL ncTestGetCreateSwapchainWrapper();
 
 #ifdef __cplusplus
 }

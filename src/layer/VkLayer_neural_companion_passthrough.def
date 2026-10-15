@@ -14,4 +14,6 @@ EXPORTS
     ncTestGetFallbackQueueCount
     ncTestGetFallbackSwapchainCount
     ncTestResetFallbackState
+    ncTestIsSwapchainTracked
     ncTestGetPresentWrapper
+    ncTestGetCreateSwapchainWrapper

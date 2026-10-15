@@ -38,6 +38,35 @@ static VKAPI_ATTR VkResult VKAPI_CALL MockPresentB(VkQueue q, const VkPresentInf
     return VK_SUCCESS;
 }
 
+static int g_mockCreateSwapchainCalls = 0;
+static int g_mockDestroySwapchainCalls = 0;
+static VkSwapchainKHR g_lastDestroyedSwapchain = VK_NULL_HANDLE;
+static const VkAllocationCallbacks* g_lastDestroyAllocator = nullptr;
+static const VkSwapchainKHR kSimulatedDownstreamSwapchain = reinterpret_cast<VkSwapchainKHR>(static_cast<uintptr_t>(0x5CAFE));
+
+static VKAPI_ATTR VkResult VKAPI_CALL MockCreateSwapchain(
+    VkDevice /*device*/,
+    const VkSwapchainCreateInfoKHR* /*pCreateInfo*/,
+    const VkAllocationCallbacks* /*pAllocator*/,
+    VkSwapchainKHR* pSwapchain)
+{
+    ++g_mockCreateSwapchainCalls;
+    if (pSwapchain) {
+        *pSwapchain = kSimulatedDownstreamSwapchain;
+    }
+    return VK_SUCCESS;
+}
+
+static VKAPI_ATTR void VKAPI_CALL MockDestroySwapchain(
+    VkDevice /*device*/,
+    VkSwapchainKHR swapchain,
+    const VkAllocationCallbacks* pAllocator)
+{
+    ++g_mockDestroySwapchainCalls;
+    g_lastDestroyedSwapchain = swapchain;
+    g_lastDestroyAllocator = pAllocator;
+}
+
 int main() {
     std::cout << "=================================================================\n";
     std::cout << " Neural-Companion: Layer Dispatch & Query Semantics Test\n";
@@ -287,12 +316,15 @@ int main() {
         auto pfnGetFallbackQueueCount = reinterpret_cast<decltype(&ncTestGetFallbackQueueCount)>(GetProcAddress(hLayer, "ncTestGetFallbackQueueCount"));
         auto pfnGetFallbackSwapchainCount = reinterpret_cast<decltype(&ncTestGetFallbackSwapchainCount)>(GetProcAddress(hLayer, "ncTestGetFallbackSwapchainCount"));
         auto pfnResetFallbackState = reinterpret_cast<decltype(&ncTestResetFallbackState)>(GetProcAddress(hLayer, "ncTestResetFallbackState"));
+        auto pfnIsSwapchainTracked = reinterpret_cast<decltype(&ncTestIsSwapchainTracked)>(GetProcAddress(hLayer, "ncTestIsSwapchainTracked"));
         auto pfnGetPresentWrapper = reinterpret_cast<decltype(&ncTestGetPresentWrapper)>(GetProcAddress(hLayer, "ncTestGetPresentWrapper"));
+        auto pfnGetCreateSwapchainWrapper = reinterpret_cast<decltype(&ncTestGetCreateSwapchainWrapper)>(GetProcAddress(hLayer, "ncTestGetCreateSwapchainWrapper"));
 
         TEST_ASSERT(pfnRegisterMockDevice && pfnUnregisterMockDevice && pfnRecordFallbackQueue &&
                     pfnRegisterMockSwapchain && pfnRegisterDeviceOwnedQueue && pfnRegisterDeviceOwnedSwapchain &&
                     pfnGetFallbackQueueCount && pfnGetFallbackSwapchainCount && pfnResetFallbackState &&
-                    pfnGetPresentWrapper, "All test hooks must be exported and resolvable from layer DLL");
+                    pfnIsSwapchainTracked && pfnGetPresentWrapper && pfnGetCreateSwapchainWrapper,
+                    "All test hooks must be exported and resolvable from layer DLL");
 
         PFN_vkQueuePresentKHR layerPresent = pfnGetPresentWrapper();
         TEST_ASSERT(layerPresent != nullptr, "Layer presentation wrapper must be non-null");
@@ -390,6 +422,78 @@ int main() {
         pfnUnregisterMockDevice(mockDevB);
         pfnResetFallbackState();
         std::cout << "  [PASS] Mock devices and fallback state cleaned up cleanly\n";
+
+        // -------------------------------------------------------------------------
+        // TEST 5: Swapchain Creation Ownership Rollback Under Allocation Failure & Full Fallback
+        // -------------------------------------------------------------------------
+        std::cout << "\n--- Test 5: Swapchain Creation Ownership Rollback Under Fault Injection ---\n";
+
+        VkDevice mockDevRollback = reinterpret_cast<VkDevice>(static_cast<uintptr_t>(0xC000));
+        neural_companion::DeviceData* pRollbackDevData = nullptr;
+        TEST_ASSERT(pfnRegisterMockDevice(mockDevRollback, MockPresentA, &pRollbackDevData), "Register mock device for rollback test");
+        TEST_ASSERT(pRollbackDevData != nullptr, "Mock device data must be non-null");
+
+        pRollbackDevData->vkCreateSwapchainKHR = MockCreateSwapchain;
+        pRollbackDevData->vkDestroySwapchainKHR = MockDestroySwapchain;
+
+        // Reset fallback state and fill fallback swapchain table to capacity (64 entries)
+        pfnResetFallbackState();
+        for (size_t i = 0; i < 64; ++i) {
+            VkSwapchainKHR sc = reinterpret_cast<VkSwapchainKHR>(static_cast<uintptr_t>(0x6000 + i));
+            TEST_ASSERT(pfnRegisterMockSwapchain(sc, mockDevRollback, /*useFallbackTable=*/true), "Fill fallback swapchain entry");
+        }
+        TEST_ASSERT(pfnGetFallbackSwapchainCount() == 64, "Fallback swapchain table must be full (64 entries)");
+
+        // Save previous NC_TEST_SIMULATE_SWAPCHAIN_OOM state
+        char origSimScOOM[16] = {0};
+        DWORD origSimScOOMLen = GetEnvironmentVariableA("NC_TEST_SIMULATE_SWAPCHAIN_OOM", origSimScOOM, sizeof(origSimScOOM));
+        bool hadOrigSimScOOM = (origSimScOOMLen > 0);
+
+        // Enable swapchain map and owned-vector allocation failure simulation
+        SetEnvironmentVariableA("NC_TEST_SIMULATE_SWAPCHAIN_OOM", "1");
+
+        VkAllocationCallbacks callerAllocator{};
+        callerAllocator.pUserData = reinterpret_cast<void*>(static_cast<uintptr_t>(0xBEEF));
+
+        VkSwapchainCreateInfoKHR swapchainCreateInfo{};
+        swapchainCreateInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+
+        VkSwapchainKHR outSwapchain = reinterpret_cast<VkSwapchainKHR>(static_cast<uintptr_t>(0x1234));
+        g_mockCreateSwapchainCalls = 0;
+        g_mockDestroySwapchainCalls = 0;
+        g_lastDestroyedSwapchain = VK_NULL_HANDLE;
+        g_lastDestroyAllocator = nullptr;
+
+        PFN_vkCreateSwapchainKHR layerCreateSwapchain = pfnGetCreateSwapchainWrapper();
+        TEST_ASSERT(layerCreateSwapchain != nullptr, "Layer create swapchain wrapper must be non-null");
+
+        VkResult rollbackRes = layerCreateSwapchain(mockDevRollback, &swapchainCreateInfo, &callerAllocator, &outSwapchain);
+
+        // 1. Assert VK_ERROR_OUT_OF_HOST_MEMORY
+        TEST_ASSERT(rollbackRes == VK_ERROR_OUT_OF_HOST_MEMORY, "Swapchain creation rollback must return VK_ERROR_OUT_OF_HOST_MEMORY");
+
+        // 2. Assert null output handle
+        TEST_ASSERT(outSwapchain == VK_NULL_HANDLE, "Output swapchain handle must be null after rollback");
+
+        // 3. Assert exactly one downstream destruction using caller's allocator
+        TEST_ASSERT(g_mockCreateSwapchainCalls == 1, "Downstream create must have been called exactly once");
+        TEST_ASSERT(g_mockDestroySwapchainCalls == 1, "Downstream destroy must be called exactly once during rollback");
+        TEST_ASSERT(g_lastDestroyedSwapchain == kSimulatedDownstreamSwapchain, "Downstream destroy must receive the created swapchain");
+        TEST_ASSERT(g_lastDestroyAllocator == &callerAllocator, "Downstream destroy must receive the caller's allocator");
+
+        // 4. Assert no retained ownership entry
+        TEST_ASSERT(!pfnIsSwapchainTracked(kSimulatedDownstreamSwapchain), "Swapchain must not have any retained ownership entry after rollback");
+        std::cout << "  [PASS] Swapchain creation rollback verified: VK_ERROR_OUT_OF_HOST_MEMORY, null handle, single destruction with caller allocator, and no retained entry\n";
+
+        // Restore environment and clean up mock device
+        if (hadOrigSimScOOM) {
+            SetEnvironmentVariableA("NC_TEST_SIMULATE_SWAPCHAIN_OOM", origSimScOOM);
+        } else {
+            SetEnvironmentVariableA("NC_TEST_SIMULATE_SWAPCHAIN_OOM", nullptr);
+        }
+        pfnUnregisterMockDevice(mockDevRollback);
+        pfnResetFallbackState();
+        std::cout << "  [PASS] Rollback mock device and fallback state cleaned up cleanly\n";
     } else {
         std::cout << "  [SKIP] Physical device does not support VK_KHR_swapchain; skipping enabled test\n";
     }
