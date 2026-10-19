@@ -1,6 +1,6 @@
 # Initial experiment candidates
 
-Research date: 2026-10-14. Status: proposed experiments, not implementation approval, an adopted dependency, or a compatibility result. This record narrows [the roadmap](ROADMAP.md) without freezing a public provider interface.
+Initial research: 2026-10-14; consolidated 2026-10-19. Status: proposed experiments, not implementation approval, an adopted dependency, or a compatibility result. Pass-through code and a sample harness now exist; the proposed two-game, reference-processing and inference gates remain distinct. See [current research](RESEARCH.md) and [source evidence](research/SOURCE-CANDIDATES.md). This record narrows [the roadmap](ROADMAP.md) without freezing a public provider interface.
 
 ## Recommended sequence
 
@@ -26,7 +26,7 @@ Use vkQuake only as an independently installed test host. Its repository contain
 ### First-run conditions
 
 - Windows x64, one GPU at a time, fixed 1920×1080 SDR output as a proposed starting condition.
-- Start on one available machine; the Legion RTX 4060 is a practical first candidate. Repeat on the Arc B580 after one route works. Arc 140V follows as an additional device, not a prerequisite.
+- Develop/debug on the RTX 4060 laptop, recording the actual rendering and processing adapters because the host has multiple GPUs. Repeat a stable package on the Arc B580 gaming desktop for final acceptance; do not depend on that desktop for development/debugging.
 - Record exact game build, executable bitness, GPU/driver/OS, display mode, wrapper/layer versions, and settings.
 - Keep the selected game unmodified except for the explicit test route; use a separate test configuration and preserve the existing installation state.
 - Establish baseline game stability before adding the layer. For Skyrim, measure native D3D11 and DXVK without Neural-Companion separately.
@@ -82,4 +82,4 @@ Before an inference experiment, complete the exact artifact/dependency review an
 
 ## Next concrete task
 
-Prepare a capture-only implementation brief once the local test hosts and toolchain are known. Keep the brief bounded to scoped layer activation, unchanged pass-through, one deterministic effect, lifecycle handling, and diagnostic evidence. Conduct neural-provider artifact review and an isolated benchmark separately. Do not make proprietary backend availability a dependency of the capture prototype.
+Review the existing pass-through implementation and its revision-bound evidence before extending it. Then scope a deterministic effect and actual color read/copy path separately, with synchronization and transfer-cost evidence. Conduct exact neural-provider artifact review and an isolated benchmark independently. A provider-control comparison requires documented inputs; an AeonSR missing-input comparison must remain separately labelled. No game execution or provider integration is authorized by these research notes.
