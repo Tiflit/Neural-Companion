@@ -1,4 +1,5 @@
 #include "layer.h"
+#include "diagnostic_path.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -194,13 +195,8 @@ FILE* g_logFile = nullptr;
 
 void InitLoggingLocked() {
     if (!g_logFile) {
-        char envPath[MAX_PATH];
-        DWORD len = GetEnvironmentVariableA("NC_LOG_PATH", envPath, MAX_PATH);
-        if (len > 0 && envPath[0] != '\0') {
-            fopen_s(&g_logFile, envPath, "a");
-        } else {
-            fopen_s(&g_logFile, "neural_companion_passthrough.log", "a");
-        }
+        char envPath[MAX_PATH]{};
+        fopen_s(&g_logFile, neural_companion::detail::ResolveDiagnosticLogPath(envPath), "a");
     }
 }
 
