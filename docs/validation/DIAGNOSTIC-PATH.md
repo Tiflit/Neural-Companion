@@ -1,5 +1,7 @@
 # Diagnostic environment path — Issue #9
 
+**Profile status:** the human approved `diagnostic-path-cpu-v1`; activation is recorded in [Issue #9](https://github.com/Tiflit/Neural-Companion/issues/9#issuecomment-6346292771). The active `.yml` now contains the reviewed proposal's commands and limits. The retained `.yml.proposed` and preparation text below preserve the original inactive submission. Cloud verification is pending; final revision-bound results supplement this note in PR #10's completion record. No local or full-layer/device execution is authorized by the profile.
+
 ## Source repair
 
 The experimental pass-through layer already exists; this change concerns its logging path only. It adds no enhancement effect, provider, loader dispatch or device behavior. README/continuation alignment remains in the separate existing documentation work (#6/#7/#8).
@@ -12,9 +14,9 @@ The new internal helper accepts only a positive result strictly below the fixed 
 
 Standalone CMake project `tests/diagnostics` compiles the actual helper against the Windows SDK only. It does not configure the root Vulkan build, include Vulkan headers, link the loader, create a device, enable a layer or run the existing GPU harness. Eight CTest cases cover Unset, Empty, Short, MaximumFit, ExactCapacity, OneOverCapacity, LargeValue and StaleAfterLong. They set only their disposable process's `NC_LOG_PATH` to synthetic values; they do not read its previous value, enumerate the environment, open log files or print selected values. Cases run in separate child processes and expire after five seconds each.
 
-These tests are prepared, **NOT RUN**. No unchanged-source red run or full-layer compilation was performed. Source/diff self-review is distinct from compiled or runtime evidence. Full layer/Vulkan dispatch, loader, GUI, GPU and game validation remain unverified. The alias-dispatch defect from the backlog is outside this repair.
+At initial submission these tests were prepared, **NOT RUN**. No unchanged-source red run or full-layer compilation was performed. Source/diff self-review is distinct from compiled or runtime evidence. Full layer/Vulkan dispatch, loader, GUI, GPU and game validation remain unverified. The alias-dispatch defect from the backlog is outside this repair.
 
-## Inactive cloud profile proposal: diagnostic-path-cpu-v1
+## Original inactive cloud profile proposal: diagnostic-path-cpu-v1
 
 The file `.github/workflows/diagnostic-path-tests.yml.proposed` is inert: GitHub Actions does not load it as a workflow. Human approval is requested before copying its reviewed content to `.github/workflows/diagnostic-path-tests.yml`. Preparation does not authorize local execution or another host profile.
 
