@@ -2,7 +2,7 @@
 
 An independent project for applying neural visual enhancement across games, using the best rendering information each game makes available.
 
-**Status: planning draft. No runtime, installer, supported backend, or verified game/GPU compatibility is implemented yet.** Broad compatibility is the goal, not a current guarantee.
+**Status: an experimental Windows x64 explicit Vulkan pass-through layer and sample-validation harness are implemented.** Rendered-color acquisition/processing, neural inference, an installer and general game/GPU compatibility are not established. Broad compatibility remains a goal.
 
 ## Purpose
 
@@ -35,7 +35,8 @@ DLSS 5 neural rendering is an initial integration candidate, not a dependency se
 | [Architecture proposal](docs/ARCHITECTURE.md) | Capture routes, input preparation, providers, and integration boundaries |
 | [Roadmap and validation](docs/ROADMAP.md) | Evidence gates, experiments, and implementation sequence |
 | [Initial experiment candidates](docs/INITIAL-EXPERIMENTS.md) | Provisional test hosts, provider shortlist, and evidence required before implementation |
-| [Related projects](docs/RESEARCH.md) | Inspiration, reuse candidates, source limitations, and open investigations |
+| [Related projects](docs/RESEARCH.md) | Curated capture/input/provider references and deferred or excluded directions |
+| [Current source evidence](docs/research/SOURCE-CANDIDATES.md) | Pinned licence findings, corrections and exact reuse limitations |
 | [Component policy](docs/COMPONENT-POLICY.md) | Unmodified models, proprietary files, provenance, and licensing review |
 | [Source review rules](docs/SOURCE-REVIEW.md) | Required licence checks, provenance, and attribution before code reuse |
 | [Licence review register](docs/LICENSE-REVIEW.md) | Pinned findings and blocked/unapproved sources |
@@ -44,7 +45,7 @@ DLSS 5 neural rendering is an initial integration candidate, not a dependency se
 
 The proposed validation sequence is unchanged pass-through, an obvious deterministic reference effect, then a small legally usable neural provider. Framework compatibility and each provider's hardware support will be measured separately; a reference effect is not neural rendering, and a restoration model is not proof of neural relighting.
 
-These documents are an initial planning baseline. Architecture details are proposals unless explicitly identified as established direction. There are no release dates or performance promises.
+Planning and research documents distinguish proposals from implemented source and inspected/reported evidence. Architecture details are proposals unless explicitly identified as established direction. There are no release dates or performance promises.
 
 ## Third-party work
 

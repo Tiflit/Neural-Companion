@@ -1,64 +1,57 @@
 # Related projects and research
 
-Status: documentation-based reconnaissance, 2026-10-14. None of these projects has been executed or technically audited for Neural-Companion. Descriptions summarize upstream claims, not certified capabilities.
+Updated 2026-10-19. This is a curated research direction, not a dependency selection or hardware-compatibility result. The repository contains explicit Vulkan pass-through code and a sample-validation harness; their existence does not prove rendered-color acquisition, a reference effect, neural inference or two-game acceptance.
 
-No source, dependency, binary, or model from this list has been adopted. Consult the [pinned licence review](LICENSE-REVIEW.md) before implementation study and follow [source review rules](SOURCE-REVIEW.md). Technical relevance is not permission to reuse code.
-
-Licence triage changed the shortlist: NeuralScreen is restrictive; BGFX-DLSS5-NR and UNCANNY have no explicit licence located at their inspected revisions; DLSS5-Patcher has a README MIT claim but incomplete repository licensing evidence. Their code/assets are blocked for reuse pending clarification. OptiScaler and inspected neural forks require a copyleft compatibility decision. The register contains exact evidence and limits.
+The [current source evidence](research/SOURCE-CANDIDATES.md) supplements the [historical licence register](LICENSE-REVIEW.md). Follow [source review rules](SOURCE-REVIEW.md) before implementation study. No external implementation, runtime or model is adopted by these notes.
 
 ## Priority references
 
-| Project | Relevant idea | Caveat / proposed use |
+| Source | Relevant question | Use and limit |
 |---|---|---|
-| [DLSS5-Feeder](https://github.com/jlrouzies-fr/DLSS5-Feeder) | Builds a synthetic DLAA request from color, depth, and estimated motion; Vulkan/DXVK and separate 64-bit helper routes | Study transport and input contracts. Its MIT code does not license separate neural add-ons or vendor runtimes. |
-| [dlss5-bridge](https://github.com/NIGos/dlss5-bridge) | Bridges D3D11/Vulkan and distinguishes game-provided inputs from substitute inputs | Study resource sharing, fallback quality, and diagnostics; NVIDIA runtime requirements remain separate. |
-| [OptiScaler](https://github.com/optiscaler/OptiScaler) | Existing upscaler interception and backend selection | Useful when native hooks exist. Does not solve arbitrary legacy-game input recovery. |
-| [wilsjo2 neural-rendering fork](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass) | Neural-pass placement, processing-resolution controls, and color handling | Experimental fork, distinct from mainline; inspect licences and exact supported runtime before reuse. |
-| [bgfx-dlss5-nr](https://github.com/andrewmd5/bgfx-dlss5-nr) | External effect package with DirectX/Vulkan matrix capability selection | Product inspiration. The public repository does not establish complete model provenance or redistribution rights. |
-| [NeuralScreen](https://github.com/perseval-BLR/NeuralScreen) | Desktop/window capture, reduced-resolution neural processing, composition | Study external fallback UX and measured support. Runtime bundling in another project is not permission to bundle it here. |
-| [UNCANNY](https://github.com/coye2/UNCANNY) | Standalone remastering product, profiles, motion protection, optional neural provider | Broad but unfinished claims; Vulkan/OpenGL parity and AMD proof are explicitly incomplete. Asset reconstruction is beyond our initial scope. |
-| [DLSS5-Autopilot](https://github.com/Kizzuwatnaa/DLSS5-Autopilot) | Route selection, component lifecycle, and dependency notices | Deployment inspiration. Downloads from community mirrors do not establish rights. |
-| [DLSS5-Patcher](https://github.com/MRHRTZ/DLSS5-Patcher/releases) | Automated installation for multiple game routes | Existing name and product overlap; no reuse decision or runtime-rights validation. |
+| [ReShade](https://github.com/crosire/reshade), [RenoDX](https://github.com/clshortfuse/renodx), [RenderDoc](https://github.com/baldurk/renderdoc) | Which resources and processing stages can a real game integration expose? | Capture/diagnostic candidates. Different injection APIs and per-game adapters are not universal Vulkan input recovery. |
+| [AeonSR](https://github.com/BarbatosAWLS/AeonSR) | What can an estimated-motion route achieve when engine inputs are absent? | Separate external comparison. Native-resolution AA does not reduce scene rendering cost; verify a true reduced-resolution route before calling it upscaling. |
+| [xplane-fsr3](https://github.com/JonathanOrr/xplane-fsr3) | How does a game-specific integration recover useful temporal inputs? | One-game reference. Camera reconstruction does not supply complete animated-object motion. |
+| [DLSS5-Feeder](https://github.com/jlrouzies-fr/DLSS5-Feeder), [NIGos/dlss5-bridge](https://github.com/NIGos/dlss5-bridge) | How are inputs described and transported across API/process boundaries? | MIT own-code candidates with inherited/third-party notices. Neither grants rights to proprietary neural runtimes or makes estimated inputs native. |
+| [numsu/dlss-bridge](https://github.com/numsu/dlss-bridge) | Can acquisition and provider execution remain separate? | The embedded Vulkan bridge has an MIT grant; no umbrella grant was located for the outer project. Limit any study/reuse to a cleared exact scope. |
+| [ReScaleFrame](https://github.com/KillerPixelCrew/ReScaleFrame) | What should a frame/provider contract contain? | Its Game SDK is MIT, root is GPL and managed-runtime provenance has retained restrictions. Conditional contract reference; no managed-runtime adoption. |
+| [OptiScaler](https://github.com/optiscaler/OptiScaler) | Can an existing provider router consume inputs a game already exposes? | Conditional downstream adapter under GPL obligations. It does not solve arbitrary legacy-game input recovery. |
 
-## Technically close but outside the selected model policy
+These projects solve different layers: capture, input recovery, transport, provider routing and inference. Treating them as interchangeable “enhancement engines” hides the main feasibility questions. Keep genuine engine inputs, camera reconstruction, optical flow and unavailable data distinct in diagnostics.
 
-[dlss-nr-on-intel](https://github.com/Uzbekunknown/dlss-nr-on-intel) describes Intel XMX inference through Vulkan cooperative matrices, a Vulkan presentation layer, and DXVK routes on Windows. Its code is Apache-2.0, but it requires weights extracted from a user-supplied NVIDIA DLL and independently reimplements the inference graph.
+## Consolidated experiment direction
 
-That inference route is **not a selected backend**: architecture recovery and weight extraction conflict with this project's use-as-supplied boundary. Potentially separable capture or transport ideas may still be studied subject to code and licence review.
+Keep the pass-through/reference-effect gates in [the roadmap](ROADMAP.md) and [initial experiments](INITIAL-EXPERIMENTS.md). A provider control and a missing-input comparison answer different questions:
 
-Likewise, patched hardware-unlock runtimes and proprietary model conversion should not become implicit dependencies through another project's installer.
+1. Use a controlled scene/host with documented inputs, reset semantics and an authorized unmodified provider. Measure stock-provider cost before adding bridge/framework overhead.
+2. Use one owned offline older game with a repeatable scene and useful depth where available. Compare the original route, the exact DXVK route separately where applicable, pass-through/reference processing, then a separately labelled estimated-motion baseline.
+3. Add ReScaleFrame/OptiScaler adapters only after their required input fields can actually be supplied and the concrete licensing/integration basis is resolved.
 
-## Rendering foundations
+Do not begin with frame generation or assume a neural-relighting runtime is available. OIDN and Real-ESRGAN remain isolated denoising/restoration laboratory candidates, not proofs of remastering quality or interactive temporal performance. A deterministic tint alone does not prove color read/copy, provider invocation or output use.
 
-- [DXVK](https://github.com/doitsujin/dxvk): Direct3D 8/9/10/11 translation to Vulkan. API normalization does not normalize camera or motion-buffer semantics.
-- [Vulkan loader/layer interface](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderLayerInterface.md): interception and call-chain rules.
-- [DXVK Remix](https://github.com/NVIDIAGameWorks/dxvk-remix): relevant scene tracking and motion-history research. This is a specialized renderer, not a universal replacement for ordinary DXVK.
-- [RTX Remix compatibility](https://github.com/NVIDIAGameWorks/rtx-remix/wiki/Compatibility): explains the narrower fixed-function compatibility target.
-- [AMD FSR input documentation](https://gpuopen.com/manuals/fsr_sdk/techniques/super-resolution-upscaler/): concrete examples of motion scaling, coverage, depth, and transparency limitations. These are not DLSS 5 requirements.
+Develop/debug on the development laptop; record both the rendering and processing adapters because a dual-GPU route can introduce extra copies or select the wrong device. Repeat a stable package on the target gaming desktop for acceptance. Determine CPU versus GPU limitations before attributing a benefit to reduced resolution. Linux and Proton follow as separate routes, not inferred compatibility.
 
-## Neural-rendering inputs
+Record exact source/package hashes, game/API/bitness, driver/OS, adapters, input provenance, scene/input/output extents and processing stage. Measure frame-time distributions, transfer/synchronization cost, VRAM, temporal artifacts and UI readability. Report rendered versus generated/presented FPS separately. Do not claim input-to-display latency without a method that actually measures it. Choose numeric acceptance thresholds before evaluating the comparison.
 
-[NVIDIA's DLSS 5 research description](https://research.nvidia.com/labs/adlr/DLSS5/) lists the current rendered frame, engine motion vectors, temporal state, and artistic controls at inference. Training also uses renderer-derived supervision; that does not mean all those scene attributes are mandatory runtime buffers.
+## Removed and deferred recommendations
 
-The [developer overview](https://developer.nvidia.com/blog/whats-new-for-game-developers-dlss-5-with-3d-guided-neural-rendering-nvidia-ace-updates-and-new-rtx-kit-capabilities/) describes masking controls and the benefit of richer source rendering. Neither page is a substitute for an authorized integration SDK contract.
+Restricted or unclear sources are no longer active implementation suggestions: LumeniteFX, Luma-Framework, NeuralScreen, HelixSR, DXVK-Studio-CE, UNCANNY, TuxScaling, OptiTux, bgfx-dlss5-nr and DLSS5-Patcher. Their specific terms or gaps remain in [source evidence](research/SOURCE-CANDIDATES.md) to prevent accidental reintroduction. VulkanStory likewise needs exact-path provenance resolution.
 
-## Investigation checklist
+Model extraction/reconstruction/conversion routes remain excluded, including the reviewed d4r, x4r, DLSSNR-RDNA3, dlss-nr-on-intel and FSR shader-override approaches. Their own code licences do not change the use-as-supplied policy. Do not inherit patched runtimes or model work through an installer.
 
-For promising candidates, inspect:
+Linux presentation/profile experiments, offline video pipelines, generic installers and ambiguous Prism projects are deferred until a specific gap justifies investigation. README promises, badges, screenshots and old release-date predictions do not select a dependency. Earlier date-based speculation has been removed; inspect the actual authorized artifact and contract if one becomes relevant.
 
-1. Actual implementation versus README promises.
-2. Exact commit/release and all licences, including bundled files.
-3. Where color is captured, whether UI is included, and color-space handling.
-4. Whether motion is native, camera-reconstructed, optical-flow-estimated, or absent.
-5. Resource sharing and synchronization across API/process boundaries.
-6. Real runtime/device restrictions and behavior on missing components.
-7. Repeatable performance and motion-quality evidence.
-8. Whether the useful part can be reused without prohibited model work.
+## Rendering foundations and technical references
 
-No current source establishes an authorized, unmodified DLSS 5 runtime usable across NVIDIA, AMD, and Intel devices. Broad framework support and backend hardware support must remain separate.
+- [DXVK](https://github.com/doitsujin/dxvk) normalizes supported Direct3D calls to Vulkan, not camera/motion/UI semantics.
+- [Vulkan loader/layer interface](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderLayerInterface.md) and [Vulkan Guide](https://github.com/KhronosGroup/Vulkan-Guide) describe API/layer rules. Documentation, source and SDK artifact licences differ.
+- [AMD FSR inputs](https://gpuopen.com/manuals/fsr_sdk/techniques/super-resolution-upscaler/) illustrate depth, motion scaling, coverage and transparency requirements. They are not a DLSS 5 contract.
+- [DXVK Remix](https://github.com/NVIDIAGameWorks/dxvk-remix) and [RTX Remix compatibility](https://github.com/NVIDIAGameWorks/rtx-remix/wiki/Compatibility) concern specialized scene tracking/rendering, not a universal ordinary-DXVK replacement.
+- [NVIDIA's DLSS 5 research description](https://research.nvidia.com/labs/adlr/DLSS5/) and [developer overview](https://developer.nvidia.com/blog/whats-new-for-game-developers-dlss-5-with-3d-guided-neural-rendering-nvidia-ace-updates-and-new-rtx-kit-capabilities/) are research/product references. Training supervision is not automatically a mandatory runtime-buffer list, and public articles do not replace an authorized integration contract.
 
-The announced October 16 NVIDIA model update is not assumed to be available to any community tool or this project. Recheck acquisition, terms, compatibility, and measured behavior when an actual component is selected.
+No source reviewed here establishes an authorized unmodified DLSS 5 runtime across NVIDIA, AMD and Intel. Separate framework portability from each backend's requirements.
 
-## Initial inference and capture experiments
+## Relationship to DXVK-Companion
 
-The [initial experiment record](INITIAL-EXPERIMENTS.md) evaluates Open Image Denoise as an isolated neural-inference candidate, Real-ESRGAN ncnn Vulkan as a secondary restoration route, and vkQuake/clean Skyrim Special Edition as a provisional capture pair. Their roles and unresolved rights differ; none is an adopted dependency or validated compatibility result. Additional pinned licence findings are recorded in the register.
+[DXVK-Companion's component-management research](https://github.com/Tiflit/DXVK-Companion/blob/main/docs/research/COMPANION-SOURCES.md) covers inventory, pinned acquisition, ownership and rollback. Neural-Companion owns rendering/input work; optional management integration follows stable standalone boundaries. Neither project should require the other.
+
+This consolidation changes research guidance only. It does not assign implementation, alter the model/runtime policy, certify licences for all dependencies, execute local checks or change Gemini's active task.

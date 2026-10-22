@@ -1,6 +1,8 @@
 # Source licence review register
 
-Reviewed: 2026-10-14. Scope: named project candidates and rendering foundations already referenced in planning.
+Historical baseline reviewed: 2026-10-14. Current consolidation: 2026-10-19.
+
+This page preserves earlier pinned findings as historical licence evidence, not an active recommendation list. The [current source evidence and corrections](research/SOURCE-CANDIDATES.md) covers the newly reviewed candidates and supersedes older discovery gaps where explicitly stated. Read [curated research](RESEARCH.md) for the active shortlist; restricted, incompatible and redundant leads have been removed from that shortlist.
 
 This is a **licence discovery and triage record**, not a whole-repository legal audit or permission to reuse code. Exact file headers, submodules, release archives, transitive dependencies, patents, game terms, and proprietary runtimes are not comprehensively cleared. No implementation is incorporated.
 
@@ -58,13 +60,13 @@ OIDN's separate binary-licence file was identified during triage; its applicabil
 
 Root licences and available root notices were read for the listed candidates. Additional licensing files were read for the AMD SDK. GPL/Apache standard clauses relevant to distribution were examined; per-file elections and complete dependency chains remain pending. The listed GPL text is not a conclusion that every file has the same version election or no exception.
 
-Unlisted dependencies or examples are **unreviewed**, including ReShade, other forks, shader packages, headers, helper libraries, packaged Python modules, and external snippets unless a dedicated record is added. References within an upstream NOTICE do not constitute our review of those sources.
+Sources absent from both this historical baseline and [current source evidence](research/SOURCE-CANDIDATES.md) are **unreviewed**. ReShade and selected Khronos headers now have dedicated current records; this does not clear arbitrary add-ons, forks, shaders, helper libraries, Python packages or snippets. References within an upstream NOTICE do not constitute our review of those sources.
 
 Before studying implementation details for use in our code, add the source to this register and classify the intended use under [source review](SOURCE-REVIEW.md). Approval must name exact files/revisions and obligations; no repository-wide blanket allowlist is created here.
 
 ## Current adoption record
 
-- Implementation copied/adapted/linked: none.
+- Third-party implementation copied/adapted/linked by this research: none. The project now has its own pass-through implementation; build-header provenance is recorded separately in third-party notices.
 - Third-party runtime/model/asset distributed: none.
 - Documentation citations: linked planning references, summarized in original wording.
 - Written permissions obtained or rights-holder outreach sent: none.

@@ -1,6 +1,14 @@
 # Continuation checkpoint
 
-Updated: 2026-10-15 UTC. This file preserves project continuity independently of an Antigravity conversation. It is a status checkpoint, not evidence of runtime acceptance.
+Updated: 2026-10-19. This file preserves project continuity independently of an Antigravity conversation. It is a status checkpoint, not evidence of runtime acceptance.
+
+## Current source and research checkpoint
+
+Main `53b232aec479a728164c78990ea71446188cad8a` merged PR #5 and contains explicit Vulkan pass-through code, dispatch tests and a sample-validation harness. This is an inspected source milestone, not an independently repeated coordinator run or proof of rendered-color acquisition, reference processing, neural inference or two-game acceptance. Reacquire current remote state before acting.
+
+Read [curated research](RESEARCH.md), [current source evidence](research/SOURCE-CANDIDATES.md) and [the consolidation record](research/CONSOLIDATION-2026-10-19.md). Earlier planning instructions to begin pass-through from scratch are superseded by review of the existing implementation and evidence. Existing game-isolation and execution gates remain in force. No provider or new implementation task is selected by this update.
+
+The remaining sections preserve the pre-implementation checkpoint and retention/privacy requirements. Historical observations remain attributed and must not be promoted to current validation.
 
 ## Read first in a fresh session
 
@@ -8,7 +16,7 @@ Updated: 2026-10-15 UTC. This file preserves project continuity independently of
 2. Read this file, [Issue #3](https://github.com/Tiflit/Neural-Companion/issues/3), [Vulkan synchronization](VULKAN-SYNCHRONIZATION.md), [architecture](ARCHITECTURE.md), [source review](SOURCE-REVIEW.md), and [third-party notices](../THIRD-PARTY-NOTICES.md).
 3. If repository guidance such as `AGENTS.md` exists in the checkout at that time, read it. No multi-agent workflow template has been imported at this checkpoint.
 4. Inspect the retained private local evidence index described below. Missing raw evidence remains unverified; do not reconstruct it by repeating invasive setup.
-5. Prepare the bounded pass-through task below on a new implementation branch from current main. This history-clearance task does not authorize additional implementation or game execution.
+5. Review the current pass-through source/evidence before preparing a bounded follow-up. The historical milestone below describes the original task, not an instruction to recreate it. This checkpoint does not authorize implementation or game execution.
 
 ## Durable baseline
 
@@ -32,7 +40,7 @@ These are owner-supplied Gemini reports, not independently executed Windows chec
 | Save/config isolation | Earlier active-user shell-folder registry redirection rejected | Dedicated test profile or reviewed effective isolation remains unresolved; no further Skyrim runs |
 | Restoration | Expected known-folder paths and unset user/machine Vulkan environment values reported | Exact prior registry types/existence and process overrides were not independently proven |
 | Native Vulkan game | Selection remains pending; vkQuake optional if lawful data available | No game purchase or game-data download authorized by Issue #3 |
-| Runtime implementation | None at the reviewed merge | Begin with the separately scoped pass-through milestone |
+| Runtime implementation | None at the historical PR #4 merge; pass-through code later merged in PR #5 | Review the current implementation/evidence before extending it |
 
 Tooling pins retained from Issue #3:
 - LunarG Vulkan SDK: `1.4.363.0`. This is a tooling pin, not a requirement to enable every header feature or a redistribution approval.
@@ -40,7 +48,7 @@ Tooling pins retained from Issue #3:
 - Archive SHA-256: `40565b4a724aadc4433fa4e010b4b23916d9b1f1baeee64e17186db94f54e608`.
 - Verify exact retained/downloaded artifacts and applicable terms; do not silently replace pins with latest versions.
 
-## Next bounded implementation milestone
+## Historical pass-through milestone (implemented in PR #5; review before extending)
 
 Prepare a reviewable task/PR for:
 - Minimal Windows x64 explicit Vulkan layer DLL, local manifest, build instructions, and loader negotiation/dispatch.
