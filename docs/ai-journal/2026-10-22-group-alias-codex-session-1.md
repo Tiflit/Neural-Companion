@@ -9,3 +9,7 @@ Source/diff self-review only. The new layer-cpu-v1 workflow is inert pending the
 ## Human-approved activation
 
 The human directly approved “Approve layer CPU profile” for the prepared PR #12 proposal. Activated the already scoped .yml path with the reviewed content, omitting only the inactive-status comment and retaining the proposal. Profile permits pinned official header acquisition, actual layer/mock CPU compilation and fourteen cases under the stated job/worker/time limits. Cloud results pending; no local/device execution or other scope expansion. Final revision-bound evidence follows in the PR completion/blocker record.
+
+## First approved cloud results
+
+At head `83fc1c63a8e95dd1468ac47b2a09bbbb24f098e8`, layer run 39820684484 attempt 1 compiled the actual production DLL and passed 14/14 synthetic cases; diagnostic run 39820684194 passed 8/8. Actual PR checkout was `04540524a4265515c43eac59fc2f39e6b7f3d481` over base `1c5ea06b191814c4af8635a4540a2b773cd63d18`. No compiler/test repair or unchanged-head retry was necessary. Updated current status/provenance to reflect approval and these results. Final-head evidence belongs in PR #12; human alone merges. No local, loader, driver, GPU or game validation was performed.
