@@ -1,0 +1,7 @@
+# Core/KHR dispatch preparation — #11
+
+Codex continued after human merge of PR #10. Verified main `1c5ea06b191814c4af8635a4540a2b773cd63d18` and successful main diagnostic CPU run 39818796271. Inspected actual alias caching, wrappers and official Khronos contracts; confirmed KHR-only dispatch can be advertised then fail through a missing core pointer. Created bounded #11 before edits.
+
+Cached both entry points independently, added distinct thin wrappers and retained shared result/mapping behavior and downstream query gating. Prepared fourteen mock CPU cases compiling the actual production layer; no public testing hook, root build or GPU harness changes. Reviewed pinned official Vulkan-Headers identity/notices for a proposed build-only checkout; no implementation copied or headers vendored. Existing overlapping research/docs work remains separate.
+
+Source/diff self-review only. The new layer-cpu-v1 workflow is inert pending the human's exact profile decision; the existing eight-test diagnostic profile is unchanged and proves no alias behavior. No local builds/tests/apps/helpers, device/game execution, SDK installation or cleanup. Preserve checkouts/evidence and game/profile-isolation holds. Next: human reviews the concrete profile; Codex activates only if approved, then inspects bounded compilation/mock evidence. Full loader/GPU/game acceptance stays separate. Human alone merges.

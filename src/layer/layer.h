@@ -18,6 +18,7 @@ struct InstanceData {
     PFN_vkDestroyInstance vkDestroyInstance = nullptr;
     PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices = nullptr;
     PFN_vkEnumeratePhysicalDeviceGroups vkEnumeratePhysicalDeviceGroups = nullptr;
+    PFN_vkEnumeratePhysicalDeviceGroupsKHR vkEnumeratePhysicalDeviceGroupsKHR = nullptr;
     PFN_vkCreateDevice vkCreateDevice = nullptr;
 };
 

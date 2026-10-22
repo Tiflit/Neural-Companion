@@ -306,6 +306,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL nc_vkCreateInstance(
         instData->vkDestroyInstance = reinterpret_cast<PFN_vkDestroyInstance>(next_gipa(*pInstance, "vkDestroyInstance"));
         instData->vkEnumeratePhysicalDevices = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(next_gipa(*pInstance, "vkEnumeratePhysicalDevices"));
         instData->vkEnumeratePhysicalDeviceGroups = reinterpret_cast<PFN_vkEnumeratePhysicalDeviceGroups>(next_gipa(*pInstance, "vkEnumeratePhysicalDeviceGroups"));
+        instData->vkEnumeratePhysicalDeviceGroupsKHR = reinterpret_cast<PFN_vkEnumeratePhysicalDeviceGroupsKHR>(next_gipa(*pInstance, "vkEnumeratePhysicalDeviceGroupsKHR"));
         instData->vkCreateDevice = reinterpret_cast<PFN_vkCreateDevice>(next_gipa(*pInstance, "vkCreateDevice"));
 
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -423,10 +424,11 @@ static VKAPI_ATTR VkResult VKAPI_CALL nc_vkEnumeratePhysicalDevices(
     return res;
 }
 
-static VKAPI_ATTR VkResult VKAPI_CALL nc_vkEnumeratePhysicalDeviceGroups(
+static VkResult EnumeratePhysicalDeviceGroupsImpl(
     VkInstance instance,
     uint32_t* pPhysicalDeviceGroupCount,
-    VkPhysicalDeviceGroupProperties* pPhysicalDeviceGroupProperties) noexcept
+    VkPhysicalDeviceGroupProperties* pPhysicalDeviceGroupProperties,
+    bool useKhrAlias) noexcept
 {
     neural_companion::InstanceData* instData = nullptr;
     {
@@ -437,11 +439,16 @@ static VKAPI_ATTR VkResult VKAPI_CALL nc_vkEnumeratePhysicalDeviceGroups(
         }
     }
 
-    if (!instData || !instData->vkEnumeratePhysicalDeviceGroups) {
+    if (!instData) {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
 
-    VkResult res = instData->vkEnumeratePhysicalDeviceGroups(instance, pPhysicalDeviceGroupCount, pPhysicalDeviceGroupProperties);
+    const auto enumerate = useKhrAlias ? instData->vkEnumeratePhysicalDeviceGroupsKHR
+                                      : instData->vkEnumeratePhysicalDeviceGroups;
+    if (!enumerate) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    VkResult res = enumerate(instance, pPhysicalDeviceGroupCount, pPhysicalDeviceGroupProperties);
     if ((res == VK_SUCCESS || res == VK_INCOMPLETE) && pPhysicalDeviceGroupProperties && pPhysicalDeviceGroupCount) {
         try {
             std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -456,6 +463,24 @@ static VKAPI_ATTR VkResult VKAPI_CALL nc_vkEnumeratePhysicalDeviceGroups(
         }
     }
     return res;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL nc_vkEnumeratePhysicalDeviceGroups(
+    VkInstance instance,
+    uint32_t* pPhysicalDeviceGroupCount,
+    VkPhysicalDeviceGroupProperties* pPhysicalDeviceGroupProperties) noexcept
+{
+    return EnumeratePhysicalDeviceGroupsImpl(instance, pPhysicalDeviceGroupCount,
+        pPhysicalDeviceGroupProperties, false);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL nc_vkEnumeratePhysicalDeviceGroupsKHR(
+    VkInstance instance,
+    uint32_t* pPhysicalDeviceGroupCount,
+    VkPhysicalDeviceGroupProperties* pPhysicalDeviceGroupProperties) noexcept
+{
+    return EnumeratePhysicalDeviceGroupsImpl(instance, pPhysicalDeviceGroupCount,
+        pPhysicalDeviceGroupProperties, true);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1076,7 +1101,7 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL nc_vkGetInstanceProcAddr(
     if (strcmp(pName, "vkDestroyInstance") == 0) return reinterpret_cast<PFN_vkVoidFunction>(nc_vkDestroyInstance);
     if (strcmp(pName, "vkEnumeratePhysicalDevices") == 0) return reinterpret_cast<PFN_vkVoidFunction>(nc_vkEnumeratePhysicalDevices);
     if (strcmp(pName, "vkEnumeratePhysicalDeviceGroups") == 0) return reinterpret_cast<PFN_vkVoidFunction>(nc_vkEnumeratePhysicalDeviceGroups);
-    if (strcmp(pName, "vkEnumeratePhysicalDeviceGroupsKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(nc_vkEnumeratePhysicalDeviceGroups);
+    if (strcmp(pName, "vkEnumeratePhysicalDeviceGroupsKHR") == 0) return reinterpret_cast<PFN_vkVoidFunction>(nc_vkEnumeratePhysicalDeviceGroupsKHR);
     if (strcmp(pName, "vkCreateDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(nc_vkCreateDevice);
     if (strcmp(pName, "vkGetDeviceProcAddr") == 0) return reinterpret_cast<PFN_vkVoidFunction>(nc_vkGetDeviceProcAddr);
     if (strcmp(pName, "vkEnumerateDeviceExtensionProperties") == 0) return reinterpret_cast<PFN_vkVoidFunction>(nc_vkEnumerateDeviceExtensionProperties);
